@@ -157,21 +157,18 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
         return (host, secure && !atHome)
     }
 
-    /// Types a sign-in into the page's form.
+    /// Types a sign-in into the page's form (with empty values, it only
+    /// reports which sign-in boxes the page has).
     @MainActor
     func fillSignIn(user: String, password: String) async -> FillResult {
-        guard signInTarget.secure else { return .nothing }
+        guard signInTarget.secure else { return FillResult() }
         let result = try? await webView.callAsyncJavaScript(
             SignInScript.source, arguments: ["user": user, "password": password],
-            in: nil, contentWorld: .defaultClient)
-        let filled = Set(result as? [String] ?? [])
-        log("fill: \(filled.sorted())")
-        switch (filled.contains("user"), filled.contains("password")) {
-        case (true, true): return .both
-        case (true, false): return .userOnly
-        case (false, true): return .passwordOnly
-        case (false, false): return .nothing
-        }
+            in: nil, contentWorld: .defaultClient) as? [String: Any]
+        return FillResult(filledUser: result?["user"] as? Bool ?? false,
+                          filledPassword: result?["password"] as? Bool ?? false,
+                          pageHasUser: result?["hasUser"] as? Bool ?? false,
+                          pageHasPassword: result?["hasPassword"] as? Bool ?? false)
     }
 
     func notify(_ text: String) {

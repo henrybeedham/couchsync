@@ -11,8 +11,10 @@ import WebKit
 /// fills them, the values go into the page's form and the fields are cleared.
 /// The only window you see is Apple's own.
 ///
-/// Sites that ask for the email first get the email; the password is held for
-/// up to two minutes, for that same site only, until its password box shows.
+/// Sites that ask for the email first (Google, say) get the email; the
+/// password is held for up to two minutes, for that same site only, until its
+/// password box shows. On a page with only a password box, Passwords is asked
+/// for the password.
 final class SignInHelper {
     let userField = InertTextField()
     let passwordField = InertSecureTextField()
@@ -49,15 +51,18 @@ final class SignInHelper {
         }
         pending = nil
         clearFields()
-        guard let window = web.webView.window, window.makeFirstResponder(userField) else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self else { return }
+        Task { @MainActor in
+            // Ask Passwords for whichever box the page is showing.
+            let page = await web.fillSignIn(user: "", password: "")
+            let field: NSTextField = page.pageHasPassword && !page.pageHasUser ? passwordField : userField
+            guard let window = web.webView.window, window.makeFirstResponder(field) else { return }
+            try? await Task.sleep(for: .milliseconds(100))
             if !PasswordsAutoFill.open() {
-                self.finish()
+                finish()
                 web.notify("Couldn't open Passwords. Try Edit → AutoFill → Passwords….")
                 return
             }
-            self.watch(host: target.host)
+            watch(host: target.host)
         }
     }
 
@@ -70,16 +75,25 @@ final class SignInHelper {
             let user = self.userField.stringValue, password = self.passwordField.stringValue
             if !user.isEmpty || !password.isEmpty {
                 timer.invalidate()
-                // Let the picker finish filling the pair.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    let (u, p) = (self.userField.stringValue, self.passwordField.stringValue)
-                    self.finish()
-                    self.fill(user: u, password: p, host: host)
-                }
+                // Give the picker a moment to fill the other one too.
+                self.collect(host: host, until: Date().addingTimeInterval(1))
             } else if Date() > deadline {
                 timer.invalidate()
                 self.finish()
             }
+        }
+    }
+
+    /// Waits until both fields are filled, or a second has passed.
+    private func collect(host: String, until: Date) {
+        let (u, p) = (userField.stringValue, passwordField.stringValue)
+        if (!u.isEmpty && !p.isEmpty) || Date() > until {
+            finish()
+            fill(user: u, password: p, host: host)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.collect(host: host, until: until)
         }
     }
 
@@ -91,17 +105,25 @@ final class SignInHelper {
                 self.pending = nil
                 return
             }
-            switch await web.fillSignIn(user: user, password: password) {
-            case .both, .passwordOnly:
+            let result = await web.fillSignIn(user: user, password: password)
+            log("fill: got user \(!user.isEmpty), password \(!password.isEmpty); page has user \(result.pageHasUser), password \(result.pageHasPassword); filled user \(result.filledUser), password \(result.filledPassword)")
+            if result.filledPassword {
                 self.pending = nil
-            case .userOnly where !password.isEmpty:
+            } else if !password.isEmpty && (result.filledUser || result.pageHasUser) {
+                // A site that asks for the email first. Keep the password
+                // for its next step.
                 self.pending = (host, user, password, Date().addingTimeInterval(120))
-                web.notify("Email filled. When the password box appears, choose Fill from Passwords again.")
-            case .userOnly:
+                web.notify(result.filledUser
+                    ? "Email filled. When the password box appears, choose Fill from Passwords again."
+                    : "Passwords gave CouchSync your password but not your email. Type your email and continue, then choose Fill from Passwords again.")
+            } else if result.filledUser {
                 self.pending = nil
-            case .nothing:
+            } else if !result.pageHasUser && !result.pageHasPassword {
                 self.pending = nil
                 web.notify("There's no sign-in box on this page.")
+            } else {
+                self.pending = nil
+                web.notify("Passwords didn't give CouchSync a login. Try again.")
             }
         }
     }
@@ -159,8 +181,12 @@ struct SignInFields: NSViewRepresentable {
     }
 }
 
-enum FillResult {
-    case both, userOnly, passwordOnly, nothing
+/// What a fill did, and what sign-in boxes the page has.
+struct FillResult {
+    var filledUser = false
+    var filledPassword = false
+    var pageHasUser = false
+    var pageHasPassword = false
 }
 
 /// Finds and runs the Edit → AutoFill → Passwords… menu command.
@@ -219,9 +245,9 @@ enum SignInScript {
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     };
-    const filled = [];
-    if (field && user) { set(field, user); filled.push('user'); }
-    if (pass && password) { set(pass, password); filled.push('password'); }
-    return filled;
+    const result = { hasUser: !!field, hasPassword: !!pass, user: false, password: false };
+    if (field && user) { set(field, user); result.user = true; }
+    if (pass && password) { set(pass, password); result.password = true; }
+    return result;
     """#
 }

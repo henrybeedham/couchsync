@@ -79,9 +79,11 @@ downloads a release can extract the key from the app.
 When you click into a sign-in box, a **Fill from Passwords** button appears at
 the top of the page (or use **Edit → Fill from Passwords**, ⌥⌘P). It opens
 Apple's Passwords picker; choose a login and it goes straight into the page.
-On sites that ask for your email first, choose **Fill from Passwords** again
-when the password box appears (CouchSync holds the password for up to two
-minutes, for that site only). It won't fill pages that aren't https.
+On sites that ask for your email first (Google, say), choose **Fill from
+Passwords** again when the password box appears; CouchSync holds the password
+for up to two minutes, for that site only, so it fills straight away. If
+Passwords only hands over the password, type your email, continue, and choose
+**Fill from Passwords** on the password step. It won't fill pages that aren't https.
 
 **Passkeys don't work in CouchSync.** macOS only lets web pages in
 Apple-approved browsers use passkeys, which an app like this can't be. So

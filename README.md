@@ -4,7 +4,7 @@
 
 <h1 align="center">CouchSync</h1>
 
-<p align="center"><b>Watch Netflix together on every Mac.</b></p>
+<p align="center"><b>Watch Netflix, Disney+, Prime Video and more together on every Mac.</b></p>
 
 <p align="center">
   <a href="https://henrybeedham.github.io/couchsync/"><img src="https://img.shields.io/github/v/release/henrybeedham/couchsync?label=Download&logo=apple&logoColor=white&color=7c63e6" alt="Download"></a>
@@ -19,10 +19,15 @@
   <a href="https://github.com/henrybeedham/couchsync/releases">Release notes</a>
 </p>
 
-A Mac app (Apple silicon) for watching Netflix together across Macs, like
-Teleparty but yours. Each Mac runs the app, signs in to Netflix inside it, and
-joins the same party. Play, pause, seek and choosing a title on one Mac happen
-on all of them, with a chat, GIFs and reactions alongside.
+A Mac app (Apple silicon) for watching streaming services together across
+Macs, like Teleparty but yours. Each Mac runs the app, signs in to the service
+inside it, and joins the same party. Play, pause, seek and choosing a title on
+one Mac happen on all of them, with a chat, GIFs and reactions alongside.
+
+Works with **Netflix, Disney+, Prime Video, HBO Max, Apple TV+, YouTube, BBC
+iPlayer, Crunchyroll, Paramount+ and Hulu**. Switch with the service menu in the
+toolbar. Everyone needs their own subscription to whatever you're watching, and
+some services are only available in some countries.
 
 ## Build
 
@@ -58,12 +63,28 @@ downloads a release can extract the key from the app.
 
 ## Use
 
-1. Open CouchSync on every Mac and sign in to Netflix.
+1. Open CouchSync on every Mac, pick the service from the toolbar and sign in.
 2. On one Mac: **Party → Host a party**.
 3. On the others: **Party**, then pick the host. Parties you've joined before
    are under **Recent**, and Macs on your tailnet are listed below them (marked
    *Hosting* when a party is running). Or type a Tailscale name or IP.
-4. Start a title on any Mac.
+4. Start a title on any Mac. Everyone else's CouchSync opens the same title,
+   on the same service, and keeps it in step. If a service opens the title's
+   page without starting it, CouchSync asks you to press play.
+
+### How well each service works
+
+- **Tested end to end** with two copies: **Netflix**, **YouTube** and **BBC
+  iPlayer**. Play, pause, seeking, joining late, following the party to a title
+  and fullscreen all work. On YouTube, moving on to the next video takes the
+  party with it, and ads are waited out (each viewer catches up when their ad
+  ends).
+- **Not yet tested with a subscription**: Disney+, Prime Video, HBO Max,
+  Apple TV+, Crunchyroll, Paramount+ and Hulu. Their sites load in CouchSync,
+  and they're followed through the page's video the same way, but one may need
+  adjusting if it handles its player differently. Ads on their ad-supported
+  plans aren't detected, so they can put viewers out of step until the next
+  correction. Outside the US, hulu.com sends you to Disney+.
 
 ### Chat
 
@@ -79,8 +100,8 @@ Someone who joins late gets the chat so far.
 
 ### Fullscreen
 
-Netflix's fullscreen button, its `f` key and the green traffic light all do the
-same thing: the window goes fullscreen with the chat still beside the video.
+The player's fullscreen button, its `f` key and the green traffic light all do
+the same thing: the window goes fullscreen with the chat still beside the video.
 Esc leaves. The toolbar shows when the mouse reaches the top of the screen.
 
 ### Remembered parties
@@ -116,10 +137,14 @@ blocked by Gatekeeper. Either build it on that Mac, or clear the flag once:
 
 ## How it works
 
-- `SyncScript.swift`: JavaScript injected into the page. Watches the `<video>`,
-  reports changes, applies the party's state. Seeks go through Netflix's own
-  player object, because writing `video.currentTime` crashes their player. It
-  also stands in for the page's fullscreen API so fullscreen means the window.
+- `Services.swift`: the streaming services: how to find the title in a page
+  address and how to open a title. A peer can only ever send you to a watch
+  page built here from a checked title ID.
+- `SyncScript.swift`: JavaScript injected into the page and the services'
+  player frames. Watches the `<video>`, reports changes, applies the party's
+  state. On Netflix and YouTube it drives their own player objects (writing
+  `video.currentTime` crashes Netflix's). It also stands in for the page's
+  fullscreen API so fullscreen means the window.
 - `PartySession.swift`: the party. One Mac hosts and relays; every change
   carries a sequence number; the host sends its position every 2 s so the
   others can correct drift over 2.5 s. Also reconnection and remembered parties.

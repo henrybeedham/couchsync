@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CouchSync: watch Netflix together on your Macs</title>
-<meta name="description" content="A Mac app for watching Netflix together. Synced playback, chat, GIFs and reactions.">
+<title>CouchSync: watch together on your Macs</title>
+<meta name="description" content="A Mac app for watching Netflix, Disney+, Prime Video, HBO Max, YouTube and more together. Synced playback, chat, GIFs and reactions.">
 
 <!-- Link previews (iMessage, Slack, Discord, …) -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="CouchSync">
 <meta property="og:title" content="CouchSync">
-<meta property="og:description" content="Watch Netflix together on every Mac. Download for Mac.">
+<meta property="og:description" content="Watch Netflix, Disney+, Prime Video and more together on every Mac.">
 <meta property="og:url" content="https://henrybeedham.github.io/couchsync/">
 <meta property="og:image" content="https://henrybeedham.github.io/couchsync/social.png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
-<meta property="og:image:alt" content="CouchSync: Watch Netflix together on every Mac">
+<meta property="og:image:alt" content="CouchSync: Watch together on every Mac">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="https://henrybeedham.github.io/couchsync/social.png">
 <link rel="icon" type="image/png" href="icon.png">
@@ -49,7 +49,8 @@
     font: 700 clamp(44px, 9vw, 64px)/1.05 ui-rounded, -apple-system, "SF Pro Rounded", sans-serif;
     letter-spacing: -0.02em;
   }
-  .tagline { margin: 0 0 32px; font-size: clamp(19px, 4vw, 23px); color: #cfc7ff; }
+  .tagline { margin: 0 0 8px; font-size: clamp(19px, 4vw, 23px); color: #cfc7ff; }
+  .services { margin: 0 auto 32px; max-width: 560px; color: var(--muted); font-size: 15px; }
   .download {
     display: inline-flex; align-items: center; gap: 10px;
     padding: 15px 30px; border-radius: 999px;
@@ -93,7 +94,8 @@
 <main>
   <img class="icon" src="icon.png" alt="" width="168" height="168">
   <h1>CouchSync</h1>
-  <p class="tagline">Watch Netflix together on every Mac.</p>
+  <p class="tagline">Watch together on every Mac.</p>
+  <p class="services">Netflix · Disney+ · Prime Video · HBO Max · Apple TV+ · YouTube · BBC iPlayer · Crunchyroll · Paramount+ · Hulu</p>
 
   <a class="download" href="https://github.com/henrybeedham/couchsync/releases/latest/download/CouchSync.zip">
     <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 2a1 1 0 0 1 1 1v8.6l2.8-2.8a1 1 0 1 1 1.4 1.4l-4.5 4.5a1 1 0 0 1-1.4 0L4.8 10.2a1 1 0 1 1 1.4-1.4L9 11.6V3a1 1 0 0 1 1-1ZM4 16a1 1 0 1 0 0 2h12a1 1 0 1 0 0-2H4Z"/></svg>
@@ -115,7 +117,7 @@
       <li>CouchSync isn't from the App Store, so macOS blocks it the first time. Run this once in Terminal:
         <div class="cmd"><code id="cmd">xattr -dr com.apple.quarantine /Applications/CouchSync.app</code><button type="button" id="copy">Copy</button></div>
       </li>
-      <li>Open CouchSync and sign in to Netflix. It keeps itself up to date from then on.</li>
+      <li>Open CouchSync, pick a service from the toolbar and sign in. It keeps itself up to date from then on.</li>
     </ol>
   </section>
 

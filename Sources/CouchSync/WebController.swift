@@ -3,8 +3,6 @@ import WebKit
 
 /// Owns the web view and translates between the injected script and the party.
 final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate {
-    static let home = URL(string: "https://www.netflix.com/browse")!
-
     let webView: WKWebView
     weak var session: PartySession?
 
@@ -12,16 +10,20 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
     @Published private(set) var isFullscreen = false
+    /// The service the page is on, or was last on.
+    @Published private(set) var service: StreamingService = WebController.lastService
 
     /// The title the page's script is attached to, if any.
     private var attachedVideoId: String?
+    /// The frame whose video is being synced: the page, or a player frame in it.
+    private var videoFrame: (token: String, info: WKFrameInfo)?
     /// A title the party sent us to. Until it loads, the outgoing page's events are ignored.
     private var pendingNavigation: (videoId: String, until: Date)?
     private var observers: [NSKeyValueObservation] = []
 
     override init() {
         let config = WKWebViewConfiguration()
-        // Makes the user agent identical to Safari's, which Netflix expects.
+        // Makes the user agent identical to Safari's, which the services expect.
         config.applicationNameForUserAgent = "Version/18.5 Safari/605.1.15"
         // Lets a remote "play" start playback without a local click.
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -47,6 +49,9 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
             },
             webView.observe(\.canGoBack) { [weak self] view, _ in self?.canGoBack = view.canGoBack },
             webView.observe(\.canGoForward) { [weak self] view, _ in self?.canGoForward = view.canGoForward },
+            webView.observe(\.url) { [weak self] _, _ in
+                DispatchQueue.main.async { self?.urlChanged() }
+            },
         ]
     }
 
@@ -61,7 +66,7 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
             source: "window.__couchsyncFullscreen = \(isFullscreen);",
             injectionTime: .atDocumentStart, forMainFrameOnly: true))
         controller.addUserScript(WKUserScript(
-            source: SyncScript.source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            source: SyncScript.source, injectionTime: .atDocumentStart, forMainFrameOnly: false))
     }
 
     // MARK: Fullscreen
@@ -90,7 +95,14 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
             isFullscreen = on
             installScripts()
         }
-        call("setFullscreen", on ? "true" : "false")
+        if let frame = videoFrame, !frame.info.isMainFrame {
+            // The player is in a frame: the page grows the frame to fill the
+            // window, and the frame's player is told it's fullscreen.
+            call("frameFullscreen", on ? "true" : "false", in: nil)
+            call("setFullscreen", on ? "true" : "false", in: frame.info)
+        } else {
+            call("setFullscreen", on ? "true" : "false", in: nil)
+        }
     }
 
     /// The page asked to enter or leave fullscreen.
@@ -121,35 +133,74 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
         }
     }
 
-    func goHome() { load(Self.home) }
+    func goHome() { load(service.home) }
+
+    func open(_ service: StreamingService) {
+        self.service = service
+        UserDefaults.standard.set(service.id, forKey: "service")
+        load(service.home)
+    }
+
+    static var lastService: StreamingService {
+        UserDefaults.standard.string(forKey: "service").flatMap(Services.service(id:)) ?? Services.netflix
+    }
+
+    /// The party's ID for what the page is showing. Test pages (COUCHSYNC_URL)
+    /// that aren't on a service are their own title.
+    private var currentVideoId: String? {
+        if let id = Services.videoId(for: webView.url) { return id }
+        guard Debug.url != nil, let url = webView.url, Services.service(for: url) == nil else { return nil }
+        return "page:\(url.host ?? "")\(url.path)"
+    }
+
+    /// Single-page sites (YouTube, for one) change title without loading a
+    /// new page, so the script is asked to start over with the new one.
+    private func urlChanged() {
+        if let now = Services.service(for: webView.url), now != service {
+            service = now
+            UserDefaults.standard.set(now.id, forKey: "service")
+        }
+        guard let frame = videoFrame, currentVideoId != attachedVideoId else { return }
+        log("page moved to \(currentVideoId ?? "no title")")
+        call("reset", in: frame.info)
+    }
 
     // MARK: Party -> page
 
     func apply(_ state: SharedState, force: Bool) {
         if attachedVideoId == state.videoId {
-            call("apply", Self.payload(state), force ? "true" : "false")
+            call("apply", Self.payload(state), force ? "true" : "false", in: videoFrame?.info)
         } else if force {
             navigate(toVideo: state.videoId)
         }
     }
 
     func announce() {
-        call("announce")
+        call("announce", in: videoFrame?.info)
     }
 
-    /// Only ever navigates to a Netflix watch page; a peer can't send us anywhere else.
+    /// Only ever navigates to a watch page CouchSync builds itself from a
+    /// checked title ID (see Services); a peer can't send us anywhere else.
     private func navigate(toVideo videoId: String) {
-        guard !videoId.isEmpty, videoId.count <= 20, videoId.allSatisfy(\.isNumber),
-              let url = URL(string: "https://www.netflix.com/watch/\(videoId)") else { return }
+        guard let url = Services.watchURL(for: videoId) else { return }
         if let pending = pendingNavigation, pending.videoId == videoId, pending.until > Date() { return }
         pendingNavigation = (videoId, Date().addingTimeInterval(15))
         log("navigating to \(videoId)")
         webView.load(URLRequest(url: url))
+        // Some services open a title's page without starting it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+            // Still waiting: the video never appeared.
+            guard let self, self.attachedVideoId != videoId,
+                  self.pendingNavigation?.videoId == videoId else { return }
+            let name = Services.parse(videoId)?.0.name ?? "the service"
+            self.session?.warn("Press play to join the party on \(name).")
+        }
     }
 
-    private func call(_ function: String, _ arguments: String...) {
+    /// Calls the script in `frame` (nil: the page itself).
+    private func call(_ function: String, _ arguments: String..., in frame: WKFrameInfo?) {
         let js = "window.__couchsync && window.__couchsync.\(function)(\(arguments.joined(separator: ",")))"
-        webView.evaluateJavaScript(js, completionHandler: nil)
+        webView.evaluateJavaScript(js, in: frame, in: .page, completionHandler: { _ in })
     }
 
     private static func payload(_ state: SharedState) -> String {
@@ -162,29 +213,48 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
     // MARK: Page -> party
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.frameInfo.isMainFrame,
-              let body = message.body as? [String: Any],
-              let type = body["type"] as? String else { return }
-        let videoId = body["videoId"] as? String
+        let frame = message.frameInfo
+        guard let body = message.body as? [String: Any],
+              let type = body["type"] as? String,
+              let token = body["token"] as? String else { return }
+        // A frame counts only if it's the page itself, or a player frame
+        // belonging to the service the page is on.
+        if !frame.isMainFrame {
+            guard let page = Services.service(for: webView.url),
+                  page.owns(host: frame.securityOrigin.host) else { return }
+        }
+        let fromVideoFrame = videoFrame?.token == token
+        if fromVideoFrame { videoFrame = (token, frame) }
 
         switch type {
         case "ready":
-            guard let videoId else { return }
+            // Ignore thumbnails and previews when the video is elsewhere.
+            let area = (body["area"] as? NSNumber)?.doubleValue ?? 0
+            if !frame.isMainFrame && area < 40_000 { return }
+            videoFrame = (token, frame)
+            guard let videoId = currentVideoId else {
+                attachedVideoId = nil
+                log("video on a page with no title (\(webView.url?.absoluteString ?? ""))")
+                return
+            }
             attachedVideoId = videoId
             if pendingNavigation?.videoId == videoId { pendingNavigation = nil }
-            log("video ready \(videoId)")
+            log("video ready \(videoId)\(frame.isMainFrame ? "" : " in frame \(frame.securityOrigin.host)")")
             if let state = session?.videoReady(videoId) {
-                call("init", Self.payload(state))
+                call("init", Self.payload(state), in: frame)
             } else {
-                call("init", "null")
+                call("init", "null", in: frame)
             }
+            if isFullscreen { setFullscreen(true, force: true) }
 
         case "gone":
+            guard fromVideoFrame else { return }
+            videoFrame = nil
             attachedVideoId = nil
             session?.videoGone()
 
         case "state", "tick":
-            guard let videoId,
+            guard fromVideoFrame, let videoId = attachedVideoId,
                   let paused = body["paused"] as? Bool,
                   let pos = (body["pos"] as? NSNumber)?.doubleValue, pos.isFinite else { return }
             if let pending = pendingNavigation, pending.until > Date(), pending.videoId != videoId { return }

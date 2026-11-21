@@ -517,7 +517,8 @@ final class PartySession: ObservableObject {
     private static func describe(name: String, state: SharedState, previous: SharedState?) -> String {
         let time = timestamp(state.pos)
         guard let previous, previous.videoId == state.videoId else {
-            return "\(name) started a title"
+            guard let service = Services.parse(state.videoId)?.0 else { return "\(name) started a title" }
+            return "\(name) started a title on \(service.name)"
         }
         if previous.paused != state.paused {
             return state.paused ? "\(name) paused at \(time)" : "\(name) pressed play at \(time)"

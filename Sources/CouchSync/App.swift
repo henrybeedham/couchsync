@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 /// Environment overrides, used for testing without the UI.
-///   COUCHSYNC_URL      page to open instead of Netflix
+///   COUCHSYNC_URL      page to open instead of the last service
 ///   COUCHSYNC_AUTO     "host" or "join:<address>"
 ///   COUCHSYNC_NAME     display name
 ///   COUCHSYNC_PORT     party port
@@ -34,7 +34,7 @@ final class AppModel: ObservableObject {
         session.chat = chat
         web.session = session
         chat.session = session
-        web.load(Debug.url ?? WebController.home)
+        web.load(Debug.url ?? web.service.home)
 
         if let auto = Debug.auto {
             if auto == "host" {
@@ -95,8 +95,13 @@ struct CouchSyncApp: App {
                 Divider()
                 Button("Reload Page") { model.web.webView.reload() }
                     .keyboardShortcut("r")
-                Button("Netflix Home") { model.web.goHome() }
+                Button("Home") { model.web.goHome() }
                     .keyboardShortcut("h", modifiers: [.command, .shift])
+                Menu("Open Service") {
+                    ForEach(Services.all) { service in
+                        Button(service.name) { model.web.open(service) }
+                    }
+                }
             }
         }
 
@@ -140,6 +145,9 @@ struct ContentView: View {
                     .help("Forward")
                 Button { web.webView.reload() } label: { Image(systemName: "arrow.clockwise") }
                     .help("Reload")
+            }
+            ToolbarItem(placement: .navigation) {
+                ServiceMenu()
             }
             ToolbarItemGroup(placement: .primaryAction) {
                 UpdateButton()
@@ -241,5 +249,32 @@ extension View {
                 .overlay(Capsule().stroke(Color.primary.opacity(0.12)))
                 .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
         }
+    }
+}
+
+/// Switches the page to another streaming service.
+struct ServiceMenu: View {
+    @EnvironmentObject private var web: WebController
+
+    var body: some View {
+        Menu {
+            ForEach(Services.all) { service in
+                Button {
+                    web.open(service)
+                } label: {
+                    if service == web.service {
+                        Label(service.name, systemImage: "checkmark")
+                    } else {
+                        Text(service.name)
+                    }
+                }
+            }
+        } label: {
+            Label(web.service.name, systemImage: "play.tv")
+                .labelStyle(.titleAndIcon)
+        }
+        .menuIndicator(.visible)
+        .fixedSize()
+        .help("Switch streaming service")
     }
 }

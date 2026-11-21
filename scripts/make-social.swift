@@ -35,12 +35,14 @@ func draw(_ text: String, _ f: NSFont, _ color: NSColor, x: Double, y: Double) {
 
 let left = 560.0
 draw("CouchSync", font(116, .bold), .white, x: left, y: 330)
-draw("Watch Netflix together", font(46, .semibold),
+draw("Watch together", font(46, .semibold),
      NSColor(red: 0.80, green: 0.76, blue: 1, alpha: 1), x: left + 4, y: 262)
 draw("on every Mac.", font(46, .semibold),
      NSColor(red: 0.80, green: 0.76, blue: 1, alpha: 1), x: left + 4, y: 206)
-draw("Synced playback · Chat · GIFs · Reactions", font(27, .medium),
-     NSColor(white: 1, alpha: 0.55), x: left + 6, y: 138)
+draw("Netflix · Disney+ · Prime Video · HBO Max", font(27, .medium),
+     NSColor(white: 1, alpha: 0.62), x: left + 6, y: 142)
+draw("YouTube · iPlayer · and more", font(27, .medium),
+     NSColor(white: 1, alpha: 0.62), x: left + 6, y: 104)
 
 NSGraphicsContext.current?.flushGraphics()
 try rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))

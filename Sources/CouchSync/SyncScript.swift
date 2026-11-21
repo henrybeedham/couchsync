@@ -1,39 +1,66 @@
-/// JavaScript injected into every page. It finds the playing <video>, reports
-/// play / pause / seek to the app, and applies the party's state when told to.
+import Foundation
+
+/// JavaScript injected into every page, and into the embedded player frames
+/// of the services CouchSync knows (Crunchyroll's player is in one). It finds
+/// the playing <video>, reports play / pause / seek to the app, and applies
+/// the party's state when told to. Which title is playing is up to the app,
+/// which reads it from the page address.
 ///
 /// On Netflix, seeking must go through Netflix's own player object: writing
-/// `video.currentTime` directly crashes their player.
+/// `video.currentTime` directly crashes their player. YouTube is driven
+/// through its player too, so its controls stay in step.
 enum SyncScript {
-    static let source = #"""
-    (() => {
-      if (window.__couchsync || window.top !== window) return;
-      const initialFullscreen = !!window.__couchsyncFullscreen;
+    static var source: String {
+        let domains = (try? JSONSerialization.data(withJSONObject: Services.allDomains))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        return template.replacingOccurrences(of: "__FRAME_DOMAINS__", with: domains)
+    }
 
+    private static let template = #"""
+    (() => {
+      if (window.__couchsync) return;
+      const isTop = window.top === window;
+      const host = location.hostname;
+      const onDomain = (list) => list.some((d) => host === d || host.endsWith('.' + d));
+      // In frames, only the services' own player frames.
+      if (!isTop && !onDomain(__FRAME_DOMAINS__)) return;
+      const initialFullscreen = isTop && !!window.__couchsyncFullscreen;
+
+      // Tells the app which frame a message came from.
+      const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
       const post = (m) => {
+        m.token = token;
         try { window.webkit.messageHandlers.couchsync.postMessage(m); } catch (e) {}
       };
       const now = () => performance.now();
-      const isNetflix = /(^|\.)netflix\.com$/.test(location.hostname);
+      const isNetflix = onDomain(['netflix.com']);
+      const isYouTube = onDomain(['youtube.com']);
 
       let video = null;      // element we are attached to
-      let vid = null;        // id of the title it is playing
       let attachedAt = 0;
       let announced = false; // told the app this video exists
       let ready = false;     // app has answered; events may flow
       let shared = null;     // { paused, pos, at }: what the party agreed on
       let quietUntil = 0;    // events before this are echoes of a remote change
       let lastFix = 0;
+      let resetAt = -1e9;        // when the page last moved on to another title
+      let awaitingMedia = false; // the player hasn't loaded the new title yet
       let warned = false;
 
-      const currentId = () => {
-        if (isNetflix) {
-          const m = location.pathname.match(/\/watch\/(\d+)/);
-          return m ? m[1] : null;
-        }
-        return 'page:' + location.host + location.pathname;
-      };
+      // Players often keep their <video> in a shadow root, closed ones too,
+      // where querySelectorAll can't see it. Remember every root made.
+      const shadowRoots = [];
+      try {
+        const attachShadow = Element.prototype.attachShadow;
+        Element.prototype.attachShadow = function (...args) {
+          const root = attachShadow.apply(this, args);
+          shadowRoots.push(root);
+          return root;
+        };
+      } catch (e) {}
 
       const nf = () => {
+        if (!isNetflix) return null;
         try {
           const vp = window.netflix.appContext.state.playerApp.getAPI().videoPlayer;
           const ids = vp.getAllPlayerSessionIds();
@@ -43,6 +70,15 @@ enum SyncScript {
           return null;
         }
       };
+
+      // YouTube's player object, when it's ready to be driven.
+      const yt = () => {
+        if (!isYouTube) return null;
+        const p = document.getElementById('movie_player');
+        return p && typeof p.seekTo === 'function' ? p : null;
+      };
+      // During an ad the video isn't the title, so it mustn't be synced.
+      const inAd = () => isYouTube && !!document.querySelector('.html5-video-player.ad-showing');
 
       const pos = () => {
         const p = nf();
@@ -61,6 +97,10 @@ enum SyncScript {
         if (p) {
           try { p.seek(ms); return; } catch (e) {}
         }
+        const y = yt();
+        if (y) {
+          try { y.seekTo(ms / 1000, true); return; } catch (e) {}
+        }
         if (isNetflix) {
           if (!warned) {
             warned = true;
@@ -73,12 +113,15 @@ enum SyncScript {
 
       const setPaused = (paused) => {
         const p = nf();
+        const y = yt();
         if (paused) {
           if (p) { try { p.pause(); return; } catch (e) {} }
+          if (y) { try { y.pauseVideo(); return; } catch (e) {} }
           video.pause();
           return;
         }
         if (p) { try { p.play(); return; } catch (e) {} }
+        if (y) { try { y.playVideo(); return; } catch (e) {} }
         const r = video.play();
         if (r && r.catch) {
           r.catch(() => post({ type: 'warn', message: 'Playback was blocked. Click the video once.' }));
@@ -91,11 +134,11 @@ enum SyncScript {
       const announce = (reason) => {
         const s = local();
         shared = { paused: s.paused, pos: s.pos, at: now() };
-        post({ type: 'state', videoId: vid, paused: s.paused, pos: s.pos, reason });
+        post({ type: 'state', paused: s.paused, pos: s.pos, reason });
       };
 
       const onEvent = (e) => {
-        if (!ready || e.target !== video || now() < quietUntil) return;
+        if (!ready || e.target !== video || now() < quietUntil || inAd()) return;
         if (e.type === 'pause' && video.ended) return;
         const s = local();
         // Nothing the party doesn't already know.
@@ -105,6 +148,8 @@ enum SyncScript {
 
       const apply = (s, force) => {
         shared = { paused: s.paused, pos: s.pos, at: now() };
+        // After the ad, the heartbeat brings this back in line.
+        if (inAd()) return;
         const drift = Math.abs(pos() - s.pos);
         const tolerance = force ? (s.paused ? 300 : 800) : 2500;
         const settled = !video.seeking && video.readyState >= 3;
@@ -125,37 +170,47 @@ enum SyncScript {
       const detach = () => {
         if (!video) return;
         EVENTS.forEach((n) => video.removeEventListener(n, onEvent, true));
-        video = null; vid = null; announced = false; ready = false; shared = null;
+        video = null; announced = false; ready = false; shared = null;
         post({ type: 'gone' });
       };
 
-      const attach = (v, id) => {
+      const attach = (v) => {
         detach();
-        video = v; vid = id; attachedAt = now();
+        video = v; attachedAt = now();
         EVENTS.forEach((n) => v.addEventListener(n, onEvent, true));
+      };
+
+      const area = (el) => {
+        const r = el.getBoundingClientRect();
+        return r.width * r.height;
       };
 
       const pick = () => {
         let best = null, bestArea = -1;
-        for (const v of document.querySelectorAll('video')) {
-          const r = v.getBoundingClientRect();
-          const area = r.width * r.height;
-          if (area > bestArea) { best = v; bestArea = area; }
+        const consider = (v) => {
+          const a = area(v);
+          if (a > bestArea) { best = v; bestArea = a; }
+        };
+        document.querySelectorAll('video').forEach(consider);
+        for (const root of shadowRoots) {
+          if (root.host && root.host.isConnected) root.querySelectorAll('video').forEach(consider);
         }
         return best;
       };
 
       const scan = () => {
-        const id = currentId();
-        const v = id ? pick() : null;
-        if (v !== video || (video && id !== vid)) {
-          if (v) attach(v, id); else detach();
+        const v = pick();
+        if (v !== video) {
+          if (v) attach(v); else detach();
         }
-        if (video && !announced && video.readyState >= 1) {
+        // After a title change the player may still hold the old one for a
+        // while, and an ad isn't the title either.
+        const settled = !awaitingMedia || now() - resetAt > 5000;
+        if (video && !announced && video.readyState >= 1 && settled && !inAd()) {
           // On Netflix, wait for their player object so the first seek lands.
           if (!isNetflix || nf() || now() - attachedAt > 10000) {
             announced = true;
-            post({ type: 'ready', videoId: vid });
+            post({ type: 'ready', area: area(video), top: isTop });
           }
         }
       };
@@ -170,7 +225,14 @@ enum SyncScript {
       const fsStyle = document.createElement('style');
       fsStyle.textContent = '[' + FS_ATTR + '="page"]{position:fixed!important;inset:0!important;' +
         'width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;' +
-        'margin:0!important;z-index:2147483647!important;background:#000;}';
+        'margin:0!important;z-index:2147483647!important;background:#000;}' +
+        // While something is pinned, hide everything that isn't it, inside it
+        // or around it: some of the page may be stacked above it (YouTube's
+        // header, for one). As a selector, it follows the player if the page
+        // moves it.
+        'html:has([' + FS_ATTR + '="page"]){overflow:hidden!important;}' +
+        'html:has([' + FS_ATTR + '="page"]) body *:not(:has([' + FS_ATTR + '="page"])):not([' + FS_ATTR + '="page"])' +
+        ':not([' + FS_ATTR + '="page"] *){visibility:hidden!important;}';
       const addStyle = () => (document.head || document.documentElement).appendChild(fsStyle);
       if (document.documentElement) addStyle(); else document.addEventListener('DOMContentLoaded', addStyle);
 
@@ -187,7 +249,13 @@ enum SyncScript {
         fsElement = el;
         if (el) el.setAttribute(FS_ATTR, fromPage ? 'page' : 'window');
         fsFire(el || old);
+        // Players size their video on resize; the window may not have resized.
+        setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
       };
+
+      // Some players (YouTube) don't take the page's word for fullscreen, so
+      // their player element is pinned over the whole window instead.
+      const pinnedPlayer = () => (isYouTube ? document.getElementById('movie_player') : null);
 
       // The element the player would have asked for, when the window goes
       // fullscreen on its own (green traffic light).
@@ -203,7 +271,7 @@ enum SyncScript {
       };
 
       function requestFs() {
-        fsSet(this, true);
+        fsSet(pinnedPlayer() || this, true);
         post({ type: 'fullscreen', on: true });
         return Promise.resolve();
       }
@@ -253,8 +321,34 @@ enum SyncScript {
       window.__couchsync = {
         // The app window entered or left fullscreen.
         setFullscreen(on) {
-          if (on && !fsElement) fsSet(fsGuess(), false);
+          if (on && !fsElement) {
+            const player = pinnedPlayer();
+            if (player) fsSet(player, true); else fsSet(fsGuess(), false);
+          }
           if (!on && fsElement) fsSet(null);
+        },
+        // The video is in a frame: make the frame fill the window.
+        frameFullscreen(on) {
+          if (!on) { if (fsElement) fsSet(null); return; }
+          let best = null, bestArea = 0;
+          for (const f of document.querySelectorAll('iframe')) {
+            const a = area(f);
+            if (a > bestArea) { best = f; bestArea = a; }
+          }
+          if (best && fsElement !== best) { fsSet(null); fsSet(best, true); }
+        },
+        // The page moved on to another title: start over with this video.
+        reset() {
+          resetAt = now();
+          const old = video;
+          detach();
+          if (old) {
+            // Same element, new title: wait for it to start loading.
+            awaitingMedia = true;
+            const loaded = () => { awaitingMedia = false; old.removeEventListener('loadstart', loaded); };
+            old.addEventListener('loadstart', loaded);
+          }
+          scan();
         },
         // Answer to 'ready': the party's state for this title, or null if we
         // are the first one here and should tell everyone else.
@@ -269,16 +363,16 @@ enum SyncScript {
 
       // A page loaded while the window is already fullscreen starts out fullscreen.
       if (initialFullscreen) {
-        const settle = () => { if (!fsElement) fsSet(fsGuess(), false); };
+        const settle = () => { if (!fsElement) window.__couchsync.setFullscreen(true); };
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', settle);
         else settle();
       }
 
       setInterval(scan, 500);
       setInterval(() => {
-        if (!video || !ready) return;
+        if (!video || !ready || inAd()) return;
         const s = local();
-        post({ type: 'tick', videoId: vid, paused: s.paused, pos: s.pos });
+        post({ type: 'tick', paused: s.paused, pos: s.pos });
       }, 2000);
       scan();
     })();

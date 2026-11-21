@@ -11,6 +11,14 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 BIN="$(swift build -c release --arch arm64 --show-bin-path)"
 cp "$BIN/CouchSync" "$APP/Contents/MacOS/CouchSync"
 
+# macOS uses the SDK version recorded in the app to decide whether it gets the
+# current design (Liquid Glass on macOS 26 and later). The Command Line Tools
+# record the deployment target there instead, so write the real SDK version.
+SDK_VERSION="$(xcrun --show-sdk-version)"
+vtool -set-build-version macos 14.0 "$SDK_VERSION" -replace \
+  -output "$APP/Contents/MacOS/CouchSync" "$APP/Contents/MacOS/CouchSync"
+echo "Built against the macOS $SDK_VERSION SDK"
+
 # Icon
 ICONSET="build/CouchSync.iconset"
 rm -rf "$ICONSET" && mkdir -p "$ICONSET"

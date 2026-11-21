@@ -198,8 +198,7 @@ struct ContentView: View {
                 .font(.callout.weight(.medium))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
-                .background(.regularMaterial, in: Capsule())
-                .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+                .glassCapsule()
                 .padding(18)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                 .id(toast.id)
@@ -227,6 +226,20 @@ private struct ToolbarHidesInFullscreen: ViewModifier {
             content.windowToolbarFullScreenVisibility(.onHover)
         } else {
             content
+        }
+    }
+}
+
+extension View {
+    /// Liquid Glass on macOS 26 and later, frosted material before that.
+    @ViewBuilder
+    func glassCapsule() -> some View {
+        if #available(macOS 26.0, *) {
+            glassEffect(.regular, in: Capsule())
+        } else {
+            background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().stroke(Color.primary.opacity(0.12)))
+                .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
         }
     }
 }

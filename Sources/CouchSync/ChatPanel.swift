@@ -209,9 +209,7 @@ private struct QuickReactions: View {
             }
         }
         .padding(.horizontal, 3)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().stroke(Color.primary.opacity(0.12)))
-        .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
+        .glassCapsule()
         .fixedSize()
     }
 }

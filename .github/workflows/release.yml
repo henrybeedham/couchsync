@@ -1,0 +1,42 @@
+name: Release
+
+# Every push to main that changes the app publishes a new release, bumping
+# the patch version. Run it by hand (Actions > Release > Run workflow) to
+# pick the version yourself, e.g. 1.1 or 2.0.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, e.g. 1.1 (blank for the next patch version)'
+        required: false
+      notes:
+        description: 'Release notes to put above the install steps (optional)'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIPHY_API_KEY: ${{ secrets.GIPHY_API_KEY }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_NOTES: ${{ inputs.notes }}
+        run: ./release.sh "$INPUT_VERSION" "$INPUT_NOTES"

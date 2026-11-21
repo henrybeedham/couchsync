@@ -1,27 +1,49 @@
 #!/bin/zsh
 # Builds CouchSync and publishes it as a GitHub Release.
 #
-#   ./release.sh 1.1            # tag v1.1 at the current commit
-#   ./release.sh 1.1 "Notes"    # with your own release notes
+#   ./release.sh            # next patch version (v1.0 -> v1.0.1)
+#   ./release.sh 1.1        # a specific version
+#   ./release.sh 1.1 "Notes"
 #
-# Needs the GitHub CLI (gh), signed in. Commit and push your changes first.
+# GitHub Actions runs this on every push to main (.github/workflows/release.yml).
+# Locally it needs the GitHub CLI (gh), signed in, and your changes committed.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION="${1:?usage: ./release.sh <version> [notes]}"
-VERSION="${VERSION#v}"
-TAG="v$VERSION"
+git fetch -q --tags origin
 
-if [[ -n "$(git status --porcelain)" ]]; then
-  echo "There are uncommitted changes. Commit them first." >&2
-  exit 1
+if [[ -z "${CI:-}" ]]; then
+  if [[ -n "$(git status --porcelain)" ]]; then
+    echo "There are uncommitted changes. Commit them first." >&2
+    exit 1
+  fi
+  git push -q origin HEAD
 fi
+
+if [[ -n "$(git tag --points-at HEAD --list 'v*')" ]]; then
+  echo "This commit is already released as $(git tag --points-at HEAD --list 'v*' | head -1)."
+  exit 0
+fi
+
+VERSION="${1:-}"
+VERSION="${VERSION#v}"
+if [[ -z "$VERSION" ]]; then
+  LATEST="$(git tag --list 'v*' --sort=-v:refname | head -1)"
+  LATEST="${LATEST#v}"
+  if [[ -z "$LATEST" ]]; then
+    VERSION="1.0"
+  else
+    parts=("${(@s/./)LATEST}")
+    while (( ${#parts} < 3 )); do parts+=0; done
+    VERSION="${parts[1]}.${parts[2]}.$(( parts[3] + 1 ))"
+  fi
+fi
+TAG="v$VERSION"
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   echo "$TAG already exists." >&2
   exit 1
 fi
-
-git push origin HEAD
+echo "Releasing $TAG"
 
 VERSION="$VERSION" ./build.sh
 ZIP="build/CouchSync-$VERSION.zip"
@@ -39,11 +61,12 @@ INSTALL='### Install
 
 Needs an Apple silicon Mac on macOS 14 or later.'
 
-git tag -a "$TAG" -m "CouchSync $VERSION"
-git push origin "$TAG"
-gh release create "$TAG" "$ZIP" --title "CouchSync $VERSION" \
+# The tag is created on GitHub at this commit.
+gh release create "$TAG" "$ZIP" --target "$(git rev-parse HEAD)" \
+  --title "CouchSync $VERSION" --generate-notes \
   --notes "${NOTES:+$NOTES
 
-}$INSTALL" --generate-notes
+}$INSTALL"
+git fetch -q --tags origin
 
 echo "Released $TAG"

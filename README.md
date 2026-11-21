@@ -1,4 +1,23 @@
-# CouchSync
+<p align="center">
+  <img src="docs/icon.png" width="160" height="160" alt="CouchSync icon">
+</p>
+
+<h1 align="center">CouchSync</h1>
+
+<p align="center"><b>Watch Netflix together on every Mac.</b></p>
+
+<p align="center">
+  <a href="https://henrybeedham.github.io/couchsync/"><img src="https://img.shields.io/github/v/release/henrybeedham/couchsync?label=Download&logo=apple&logoColor=white&color=7c63e6" alt="Download"></a>
+  <img src="https://img.shields.io/badge/macOS-14%2B-111?logo=apple&logoColor=white" alt="macOS 14 or later">
+  <img src="https://img.shields.io/badge/Apple%20silicon-arm64-111" alt="Apple silicon">
+  <img src="https://img.shields.io/badge/Swift-SwiftUI-F05138?logo=swift&logoColor=white" alt="Swift and SwiftUI">
+  <img src="https://img.shields.io/badge/Tailscale-ready-242424?logo=tailscale&logoColor=white" alt="Works over Tailscale">
+</p>
+
+<p align="center">
+  <a href="https://henrybeedham.github.io/couchsync/"><b>Download</b></a> ·
+  <a href="https://github.com/henrybeedham/couchsync/releases">Release notes</a>
+</p>
 
 A Mac app (Apple silicon) for watching Netflix together across Macs, like
 Teleparty but yours. Each Mac runs the app, signs in to Netflix inside it, and
@@ -20,10 +39,15 @@ Without one, the GIF browser asks for a key the first time it's opened.
 
 ## Releases
 
-Downloads are on the [Releases](https://github.com/henrybeedham/couchsync/releases)
+To share CouchSync, send https://henrybeedham.github.io/couchsync/. It's a
+download page (in `docs/`, served by GitHub Pages) whose link preview shows the
+CouchSync card, and its button always fetches the newest release. GitHub's own
+release links always show GitHub's generic card instead.
+
+Releases are on the [Releases](https://github.com/henrybeedham/couchsync/releases)
 page. They're made automatically: every push to `main` that changes the app
 builds it on GitHub and publishes the next patch version (1.0.1, 1.0.2, …).
-Pushes that only change Markdown files don't make a release.
+Pushes that only change Markdown files or `docs/` don't make a release.
 
 To choose the version yourself (say 1.1 or 2.0), open **Actions → Release →
 Run workflow** on GitHub, or run `./release.sh 1.1` on your Mac.
@@ -103,6 +127,9 @@ blocked by Gatekeeper. Either build it on that Mac, or clear the flag once:
 - `Giphy.swift`: GIF search, and a GIF view that animates.
 - `WebController.swift`: the web view, the bridge to the script, fullscreen.
 - `Updater.swift`, `UpdatePanel.swift`: update checks, download and install.
+- `WebCryptoKey.swift`: gives WebKit its own key for data the page encrypts, so
+  it doesn't use the keychain (which would ask for your password after every
+  update, since each build has a new ad-hoc signature).
 - `Tailscale.swift`: reads the tailnet from the Tailscale CLI for the join list.
 
 Set `COUCHSYNC_VERBOSE=1` to log sync activity to stderr. `App.swift` lists the

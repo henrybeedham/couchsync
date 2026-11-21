@@ -49,6 +49,9 @@ VERSION="$VERSION" ./build.sh
 ZIP="build/CouchSync-$VERSION.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent build/CouchSync.app "$ZIP"
+# Also as plain CouchSync.zip, so .../releases/latest/download/CouchSync.zip
+# always fetches the newest version (the download page links to it).
+cp "$ZIP" build/CouchSync.zip
 
 # Notes: as given, else the commit subjects since the last release. The app
 # shows everything above "### Install" in its update window.
@@ -61,7 +64,7 @@ $CHANGES"
 fi
 INSTALL='### Install
 
-1. Download **CouchSync-'"$VERSION"'.zip** below and unzip it.
+1. Download **CouchSync.zip** below (or from https://henrybeedham.github.io/couchsync/) and unzip it.
 2. Move **CouchSync.app** to Applications.
 3. The app is not notarized, so macOS will block it the first time. Clear that once in Terminal:
 
@@ -70,7 +73,7 @@ INSTALL='### Install
 Needs an Apple silicon Mac on macOS 14 or later.'
 
 # The tag is created on GitHub at this commit.
-gh release create "$TAG" "$ZIP" --target "$(git rev-parse HEAD)" \
+gh release create "$TAG" "$ZIP" build/CouchSync.zip --target "$(git rev-parse HEAD)" \
   --title "CouchSync $VERSION" --generate-notes \
   --notes "${NOTES:+$NOTES
 

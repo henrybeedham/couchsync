@@ -2,7 +2,7 @@ import AppKit
 import WebKit
 
 /// Owns the web view and translates between the injected script and the party.
-final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, WKUIDelegate {
+final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate {
     static let home = URL(string: "https://www.netflix.com/browse")!
 
     let webView: WKWebView
@@ -27,6 +27,8 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
         config.mediaTypesRequiringUserActionForPlayback = []
         // The page's fullscreen requests are handled by SyncScript instead.
         config.preferences.isElementFullscreenEnabled = false
+        // Keeps WebKit out of the keychain (and its password prompts).
+        WebCryptoKey.install(on: config.websiteDataStore)
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
         installScripts()
@@ -34,6 +36,7 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
 
         config.userContentController.add(self, name: "couchsync")
         webView.uiDelegate = self
+        webView.navigationDelegate = self  // supplies the WebCrypto key
         webView.allowsBackForwardNavigationGestures = true
         webView.isInspectable = true
 

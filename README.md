@@ -83,6 +83,12 @@ On sites that ask for your email first, choose **Fill from Passwords** again
 when the password box appears (CouchSync holds the password for up to two
 minutes, for that site only). It won't fill pages that aren't https.
 
+**Passkeys don't work in CouchSync.** macOS only lets web pages in
+Apple-approved browsers use passkeys, which an app like this can't be. So
+CouchSync tells sites it has no passkey support, and they offer a password or
+a code instead. If a site (Google, say) still asks for a passkey, choose
+**Try another way** and sign in with your password.
+
 Passwords can't fill boxes inside another app's web pages, only native ones,
 so CouchSync keeps an invisible pair of native fields for the picker to fill
 and passes the login to the page straight away. They can't be clicked or typed

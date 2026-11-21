@@ -24,6 +24,7 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
     /// A title the party sent us to. Until it loads, the outgoing page's events are ignored.
     private var pendingNavigation: (videoId: String, until: Date)?
     private var observers: [NSKeyValueObservation] = []
+    private var lastPasskeyNote = Date.distantPast
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -316,6 +317,12 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
 
         case "login":
             if frame.isMainFrame, let on = body["on"] as? Bool { loginFieldFocused = on && !atHome }
+
+        case "passkey":
+            if Date().timeIntervalSince(lastPasskeyNote) > 20 {
+                lastPasskeyNote = Date()
+                session?.warn("Passkeys don't work in CouchSync. Choose \u{201C}Try another way\u{201D} and sign in with your password.")
+            }
 
         case "warn":
             if let text = body["message"] as? String { session?.warn(text) }

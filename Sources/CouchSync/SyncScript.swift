@@ -32,6 +32,24 @@ enum SyncScript {
         m.token = token;
         try { window.webkit.messageHandlers.couchsync.postMessage(m); } catch (e) {}
       };
+      // Passkeys can't work in CouchSync: macOS only lets web pages in
+      // Apple-approved browsers use them. So don't advertise them, and sites
+      // offer a password or a code instead. If one asks for a passkey anyway,
+      // the app explains what to do.
+      try { delete window.PublicKeyCredential; } catch (e) {}
+      try {
+        const creds = navigator.credentials;
+        for (const name of ['get', 'create']) {
+          const original = creds && typeof creds[name] === 'function' ? creds[name].bind(creds) : null;
+          if (!original) continue;
+          creds[name] = (options) => {
+            // Passkey autofill in a sign-in box asks quietly; only explicit requests count.
+            if (options && options.publicKey && options.mediation !== 'conditional') post({ type: 'passkey' });
+            return original(options);
+          };
+        }
+      } catch (e) {}
+
       const now = () => performance.now();
       const isNetflix = onDomain(['netflix.com']);
       const isYouTube = onDomain(['youtube.com']);

@@ -368,6 +368,22 @@ enum SyncScript {
         else settle();
       }
 
+      // Tell the app when a sign-in field has focus, so it can offer to fill it.
+      if (isTop) {
+        const signIn = (el) => el && el.tagName === 'INPUT' &&
+          (el.type === 'password' || el.type === 'email' || /username|email/.test(el.autocomplete || ''));
+        let blurTimer = null;
+        document.addEventListener('focusin', (e) => {
+          if (!signIn(e.target)) return;
+          clearTimeout(blurTimer);
+          post({ type: 'login', on: true });
+        }, true);
+        document.addEventListener('focusout', (e) => {
+          if (!signIn(e.target)) return;
+          blurTimer = setTimeout(() => post({ type: 'login', on: false }), 600);
+        }, true);
+      }
+
       setInterval(scan, 500);
       setInterval(() => {
         if (!video || !ready || inAd()) return;

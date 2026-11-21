@@ -25,8 +25,10 @@ inside it, and joins the same party. Play, pause, seek and choosing a title on
 one Mac happen on all of them, with a chat, GIFs and reactions alongside.
 
 Works with **Netflix, Disney+, Prime Video, HBO Max, Apple TV+, YouTube, BBC
-iPlayer, Crunchyroll, Paramount+ and Hulu**. Switch with the service menu in the
-toolbar. Everyone needs their own subscription to whatever you're watching, and
+iPlayer, Crunchyroll, Paramount+ and Hulu**. CouchSync opens on **Home**, a
+TV-style launcher with a tile for each service (arrow keys and Return work like
+a remote); switch any time with the service menu in the toolbar or ⇧⌘H for
+Home. Everyone needs their own subscription to whatever you're watching, and
 some services are only available in some countries.
 
 ## Build
@@ -63,7 +65,7 @@ downloads a release can extract the key from the app.
 
 ## Use
 
-1. Open CouchSync on every Mac, pick the service from the toolbar and sign in.
+1. Open CouchSync on every Mac, pick a service on Home and sign in.
 2. On one Mac: **Party → Host a party**.
 3. On the others: **Party**, then pick the host. Parties you've joined before
    are under **Recent**, and Macs on your tailnet are listed below them (marked
@@ -71,6 +73,20 @@ downloads a release can extract the key from the app.
 4. Start a title on any Mac. Everyone else's CouchSync opens the same title,
    on the same service, and keeps it in step. If a service opens the title's
    page without starting it, CouchSync asks you to press play.
+
+### Signing in with Passwords
+
+When you click into a sign-in box, a **Fill from Passwords** button appears at
+the top of the page (or use **Edit → Fill from Passwords**, ⌥⌘P). It opens
+Apple's Passwords picker; choose a login and it goes straight into the page.
+On sites that ask for your email first, choose **Fill from Passwords** again
+when the password box appears (CouchSync holds the password for up to two
+minutes, for that site only). It won't fill pages that aren't https.
+
+Passwords can't fill boxes inside another app's web pages, only native ones,
+so CouchSync keeps an invisible pair of native fields for the picker to fill
+and passes the login to the page straight away. They can't be clicked or typed
+into, and they're cleared as soon as the login is handed over.
 
 ### How well each service works
 
@@ -155,6 +171,11 @@ blocked by Gatekeeper. Either build it on that Mac, or clear the flag once:
 - `WebCryptoKey.swift`: gives WebKit its own key for data the page encrypts, so
   it doesn't use the keychain (which would ask for your password after every
   update, since each build has a new ad-hoc signature).
+- `Launcher.swift`, `IconStore.swift`: the Home screen. The services' icons
+  aren't bundled: like a browser, CouchSync reads them from the icons each
+  service's site lists (on its home page, or on pages you open) and caches
+  them in Application Support.
+- `PasswordFill.swift`: Fill from Passwords.
 - `Tailscale.swift`: reads the tailnet from the Tailscale CLI for the join list.
 
 Set `COUCHSYNC_VERBOSE=1` to log sync activity to stderr. `App.swift` lists the

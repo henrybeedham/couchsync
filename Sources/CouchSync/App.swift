@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 /// Environment overrides, used for testing without the UI.
-///   COUCHSYNC_URL      page to open instead of the last service
+///   COUCHSYNC_URL      page to open instead of Home
 ///   COUCHSYNC_AUTO     "host" or "join:<address>"
 ///   COUCHSYNC_NAME     display name
 ///   COUCHSYNC_PORT     party port
@@ -28,13 +28,15 @@ final class AppModel: ObservableObject {
     let chat = ChatModel()
 
     @Published var showParty = false
+    let signIn = SignInHelper()
 
     init() {
         session.web = web
         session.chat = chat
         web.session = session
         chat.session = session
-        web.load(Debug.url ?? web.service.home)
+        signIn.attach(web)
+        if let url = Debug.url { web.load(url) } else { web.goHome() }
 
         if let auto = Debug.auto {
             if auto == "host" {
@@ -86,6 +88,11 @@ struct CouchSyncApp: App {
         .defaultSize(width: 1400, height: 820)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .pasteboard) {
+                Divider()
+                Button("Fill from Passwords") { model.signIn.begin() }
+                    .keyboardShortcut("p", modifiers: [.command, .option])
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.check(userInitiated: true) }
             }
@@ -121,9 +128,24 @@ struct ContentView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            WebViewHost(webView: web.webView)
-                .overlay { FloatingReactionsView() }
-                .overlay(alignment: .bottomLeading) { toast }
+            ZStack {
+                WebViewHost(webView: web.webView)
+                if web.atHome {
+                    LauncherView()
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: web.atHome)
+            .overlay { FloatingReactionsView() }
+            .overlay(alignment: .top) {
+                ZStack(alignment: .top) {
+                    SignInFields(helper: app.signIn)
+                        .frame(height: 40)
+                        .allowsHitTesting(false)
+                    fillButton
+                }
+            }
+            .overlay(alignment: .bottomLeading) { toast }
 
             if chat.isVisible {
                 Divider()
@@ -134,7 +156,8 @@ struct ContentView: View {
         }
         .ignoresSafeArea(edges: web.isFullscreen ? .all : .bottom)
         .modifier(ToolbarHidesInFullscreen())
-        .navigationTitle(web.title)
+        .navigationTitle(web.atHome ? "Home" : web.title)
+
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 Button { web.webView.goBack() } label: { Image(systemName: "chevron.left") }
@@ -199,6 +222,25 @@ struct ContentView: View {
         }
     }
 
+    /// Offered while a sign-in field on the page has focus.
+    @ViewBuilder
+    private var fillButton: some View {
+        if web.loginFieldFocused {
+            Button { app.signIn.begin() } label: {
+                Label("Fill from Passwords", systemImage: "key.fill")
+                    .font(.callout.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .glassCapsule()
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help("Fill this sign-in from the Passwords app (⌥⌘P)")
+            .padding(.top, 12)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
     @ViewBuilder
     private var toast: some View {
         if let toast = session.toast {
@@ -258,11 +300,21 @@ struct ServiceMenu: View {
 
     var body: some View {
         Menu {
+            Button {
+                web.goHome()
+            } label: {
+                if web.atHome {
+                    Label("Home", systemImage: "checkmark")
+                } else {
+                    Label("Home", systemImage: "house")
+                }
+            }
+            Divider()
             ForEach(Services.all) { service in
                 Button {
                     web.open(service)
                 } label: {
-                    if service == web.service {
+                    if service == web.service && !web.atHome {
                         Label(service.name, systemImage: "checkmark")
                     } else {
                         Text(service.name)
@@ -270,7 +322,7 @@ struct ServiceMenu: View {
                 }
             }
         } label: {
-            Label(web.service.name, systemImage: "play.tv")
+            Label(web.atHome ? "Home" : web.service.name, systemImage: web.atHome ? "house" : "play.tv")
                 .labelStyle(.titleAndIcon)
         }
         .menuIndicator(.visible)

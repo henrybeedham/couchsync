@@ -12,6 +12,10 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
     @Published private(set) var isFullscreen = false
     /// The service the page is on, or was last on.
     @Published private(set) var service: StreamingService = WebController.lastService
+    /// Showing the Home launcher instead of a page.
+    @Published private(set) var atHome = false
+    /// A sign-in field on the page has focus, so Fill Password is offered.
+    @Published private(set) var loginFieldFocused = false
 
     /// The title the page's script is attached to, if any.
     private var attachedVideoId: String?
@@ -126,6 +130,7 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
     }
 
     func load(_ url: URL) {
+        atHome = false
         if url.isFileURL {
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         } else {
@@ -133,9 +138,47 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
         }
     }
 
-    func goHome() { load(service.home) }
+    /// Shows the Home launcher. The page is emptied so nothing keeps playing
+    /// behind it; Back returns to it.
+    func goHome() {
+        atHome = true
+        loginFieldFocused = false
+        if webView.url != nil, webView.url?.absoluteString != "about:blank" {
+            webView.load(URLRequest(url: URL(string: "about:blank")!))
+        }
+    }
+
+    /// Where Fill Password would put a sign-in, and whether it's safe to.
+    var signInTarget: (host: String, secure: Bool) {
+        let url = webView.url
+        let host = url?.host ?? "this page"
+        let secure = url?.scheme == "https" || (Debug.url != nil && url?.host == "127.0.0.1")
+        return (host, secure && !atHome)
+    }
+
+    /// Types a sign-in into the page's form.
+    @MainActor
+    func fillSignIn(user: String, password: String) async -> FillResult {
+        guard signInTarget.secure else { return .nothing }
+        let result = try? await webView.callAsyncJavaScript(
+            SignInScript.source, arguments: ["user": user, "password": password],
+            in: nil, contentWorld: .defaultClient)
+        let filled = Set(result as? [String] ?? [])
+        log("fill: \(filled.sorted())")
+        switch (filled.contains("user"), filled.contains("password")) {
+        case (true, true): return .both
+        case (true, false): return .userOnly
+        case (false, true): return .passwordOnly
+        case (false, false): return .nothing
+        }
+    }
+
+    func notify(_ text: String) {
+        session?.warn(text)
+    }
 
     func open(_ service: StreamingService) {
+        atHome = false
         self.service = service
         UserDefaults.standard.set(service.id, forKey: "service")
         load(service.home)
@@ -156,6 +199,8 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
     /// Single-page sites (YouTube, for one) change title without loading a
     /// new page, so the script is asked to start over with the new one.
     private func urlChanged() {
+        loginFieldFocused = false
+        if atHome, let url = webView.url, url.absoluteString != "about:blank" { atHome = false }
         if let now = Services.service(for: webView.url), now != service {
             service = now
             UserDefaults.standard.set(now.id, forKey: "service")
@@ -186,6 +231,7 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
         if let pending = pendingNavigation, pending.videoId == videoId, pending.until > Date() { return }
         pendingNavigation = (videoId, Date().addingTimeInterval(15))
         log("navigating to \(videoId)")
+        atHome = false
         webView.load(URLRequest(url: url))
         // Some services open a title's page without starting it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
@@ -268,11 +314,38 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
         case "fullscreen":
             if let on = body["on"] as? Bool { pageWantsFullscreen(on) }
 
+        case "login":
+            if frame.isMainFrame, let on = body["on"] as? Bool { loginFieldFocused = on && !atHome }
+
         case "warn":
             if let text = body["message"] as? String { session?.warn(text) }
 
         default:
             break
+        }
+    }
+
+    // MARK: WKNavigationDelegate
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        readIcons()
+        // Some sites add their icon links with JavaScript after loading.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.readIcons() }
+    }
+
+    /// Passes the page's icon links to the Home screen's icon store.
+    private func readIcons() {
+        guard let url = webView.url, url.scheme == "https", let service = Services.service(for: url) else { return }
+        Task { @MainActor in
+            guard let links = try? await webView.callAsyncJavaScript(
+                IconStore.pageScript, arguments: [:], in: nil, contentWorld: .defaultClient) as? [[String: Any]],
+                Services.service(for: webView.url) == service else { return }
+            let candidates = links.compactMap { link -> IconStore.Candidate? in
+                guard let href = link["href"] as? String, let url = URL(string: href) else { return nil }
+                return IconStore.Candidate(url: url, rel: link["rel"] as? String ?? "",
+                                           size: IconStore.size(link["sizes"] as? String))
+            }
+            IconStore.shared.pageOffered(candidates, service: service)
         }
     }
 

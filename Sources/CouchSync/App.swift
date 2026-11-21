@@ -8,6 +8,7 @@ import WebKit
 ///   COUCHSYNC_PORT     party port
 ///   COUCHSYNC_VERBOSE  log sync activity to stderr
 ///   COUCHSYNC_DEFAULTS defaults suite for remembered parties
+///   COUCHSYNC_NO_UPDATES don't check for updates on launch
 enum Debug {
     private static let env = ProcessInfo.processInfo.environment
     static let verbose = env["COUCHSYNC_VERBOSE"] != nil
@@ -15,6 +16,7 @@ enum Debug {
     static let auto = env["COUCHSYNC_AUTO"]
     static let port = env["COUCHSYNC_PORT"].flatMap { UInt16($0) }
     static let url: URL? = env["COUCHSYNC_URL"].flatMap { URL(string: $0) }
+    static let updates = env["COUCHSYNC_NO_UPDATES"] == nil
     /// COUCHSYNC_DEFAULTS: a separate defaults suite for remembered parties, so test runs
     /// don't touch the real ones.
     static let defaults = env["COUCHSYNC_DEFAULTS"].flatMap { UserDefaults(suiteName: $0) } ?? .standard
@@ -58,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct CouchSyncApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
+    @StateObject private var updater = Updater()
 
     var body: some Scene {
         Window("CouchSync", id: "main") {
@@ -66,12 +69,26 @@ struct CouchSyncApp: App {
                 .environmentObject(model.session)
                 .environmentObject(model.web)
                 .environmentObject(model.chat)
+                .environmentObject(updater)
                 .frame(minWidth: 720, minHeight: 460)
                 .preferredColorScheme(.dark)
+                .sheet(isPresented: $updater.showPanel) {
+                    UpdatePanel()
+                        .environmentObject(updater)
+                        .environmentObject(model.session)
+                }
+                .onAppear {
+                    let session = model.session
+                    updater.notify = { session.warn($0) }
+                    updater.start()
+                }
         }
         .defaultSize(width: 1400, height: 820)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.check(userInitiated: true) }
+            }
             CommandGroup(after: .toolbar) {
                 Button("Show or Hide Chat") { model.toggleChat() }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
@@ -81,6 +98,12 @@ struct CouchSyncApp: App {
                 Button("Netflix Home") { model.web.goHome() }
                     .keyboardShortcut("h", modifiers: [.command, .shift])
             }
+        }
+
+        Settings {
+            SettingsView()
+                .environmentObject(updater)
+                .preferredColorScheme(.dark)
         }
     }
 }
@@ -119,6 +142,8 @@ struct ContentView: View {
                     .help("Reload")
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                UpdateButton()
+
                 Button { app.showParty.toggle() } label: {
                     Label(partyLabel, systemImage: partyIcon)
                         .labelStyle(.titleAndIcon)

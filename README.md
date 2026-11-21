@@ -68,6 +68,19 @@ Esc leaves. The toolbar shows when the mouse reaches the top of the screen.
 - Quit while in a party and CouchSync picks up again on the next launch, either
   rejoining or hosting again. Leaving or ending the party stops that.
 
+### Updates
+
+CouchSync checks GitHub for a new release when it opens and every six hours.
+New versions download in the background and install when you quit, or straight
+away with **Restart to Update** in the toolbar. You never get restarted in the
+middle of a film, and if you were in a party you rejoin it when CouchSync
+reopens. **CouchSync → Check for Updates…** checks now; turn automatic installs
+off in **CouchSync → Settings**, and you'll be asked instead.
+
+Updates are checked against the SHA-256 that GitHub publishes for the download,
+must have the same bundle ID and a valid signature, and are swapped in only once
+CouchSync has quit. If the swap fails, the old app is put back.
+
 The party uses TCP port 47800, directly between the Macs. There is no server.
 
 ## Installing on another Mac
@@ -89,6 +102,7 @@ blocked by Gatekeeper. Either build it on that Mac, or clear the flag once:
 - `Chat.swift`, `ChatPanel.swift`, `ReactionOverlay.swift`: chat, reactions.
 - `Giphy.swift`: GIF search, and a GIF view that animates.
 - `WebController.swift`: the web view, the bridge to the script, fullscreen.
+- `Updater.swift`, `UpdatePanel.swift`: update checks, download and install.
 - `Tailscale.swift`: reads the tailnet from the Tailscale CLI for the join list.
 
 Set `COUCHSYNC_VERBOSE=1` to log sync activity to stderr. `App.swift` lists the

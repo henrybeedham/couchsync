@@ -50,7 +50,15 @@ ZIP="build/CouchSync-$VERSION.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent build/CouchSync.app "$ZIP"
 
+# Notes: as given, else the commit subjects since the last release. The app
+# shows everything above "### Install" in its update window.
 NOTES="${2:-}"
+if [[ -z "$NOTES" ]]; then
+  PREV="$(git tag --list 'v*' --sort=-v:refname | head -1)"
+  CHANGES="$(git log --no-merges --format='- %s' ${PREV:+$PREV..}HEAD)"
+  [[ -n "$CHANGES" ]] && NOTES="### What's new
+$CHANGES"
+fi
 INSTALL='### Install
 
 1. Download **CouchSync-'"$VERSION"'.zip** below and unzip it.

@@ -44,6 +44,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# Version: from $VERSION (release.sh sets it), else 1.0.
+plutil -replace CFBundleShortVersionString -string "${VERSION:-1.0}" "$APP/Contents/Info.plist"
+plutil -replace CFBundleVersion -string "$(git rev-list --count HEAD 2>/dev/null || echo 1)" "$APP/Contents/Info.plist"
+
 # GIPHY key for the GIF browser: from $GIPHY_API_KEY or a giphy-key.txt file
 # next to this script. Without one, the app asks for a key the first time.
 GIPHY_KEY="${GIPHY_API_KEY:-$(cat giphy-key.txt 2>/dev/null || true)}"

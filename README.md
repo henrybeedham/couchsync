@@ -18,6 +18,17 @@ To turn on GIFs for everyone who gets this build, include a free GIPHY API key
 
 Without one, the GIF browser asks for a key the first time it's opened.
 
+## Releases
+
+Downloads are on the [Releases](https://github.com/henrybeedham/couchsync/releases)
+page. To publish a new one, commit your changes and run:
+
+    ./release.sh 1.1
+
+It builds the app, zips it, tags `v1.1`, and creates the GitHub Release with
+install notes. A key in `giphy-key.txt` is built in, so anyone who downloads
+the release can see it.
+
 ## Use
 
 1. Open CouchSync on every Mac and sign in to Netflix.

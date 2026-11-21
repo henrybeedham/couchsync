@@ -24,22 +24,33 @@ struct Wire: Codable {
     var on: Bool?
 }
 
-/// A TCP connection to one other Mac, carrying newline-delimited `Wire` messages.
-/// Everything runs on the main queue.
-final class Link {
-    let conn: NWConnection
-    var peerId: String?
-    var peerName: String?
+/// Something that carries bytes to one other Mac: TCP (Tailscale, LAN) or iroh (invite code).
+/// Callbacks arrive on the main queue.
+protocol Transport: AnyObject {
+    var onReady: (() -> Void)? { get set }
+    var onData: ((Data) -> Void)? { get set }
+    var onClose: ((Error?) -> Void)? { get set }
+    func start()
+    func send(_ data: Data)
+    /// Stops without calling `onClose`.
+    func cancel()
+}
 
+/// A TCP connection, for Macs that can reach each other directly (Tailscale, same network).
+final class TCPTransport: Transport {
     var onReady: (() -> Void)?
-    var onMessage: ((Wire) -> Void)?
+    var onData: ((Data) -> Void)?
     var onClose: ((Error?) -> Void)?
 
-    private var buffer = Data()
-    private var closed = false
+    private let conn: NWConnection
+    private var finished = false
 
     init(_ conn: NWConnection) {
         self.conn = conn
+    }
+
+    convenience init(host: String, port: NWEndpoint.Port) {
+        self.init(NWConnection(host: NWEndpoint.Host(host), port: port, using: Self.parameters()))
     }
 
     static func parameters() -> NWParameters {
@@ -62,9 +73,9 @@ final class Link {
                 self.onReady?()
                 self.receive()
             case .failed(let error), .waiting(let error):
-                self.close(error)
+                self.finish(error)
             case .cancelled:
-                self.close(nil)
+                self.finish(nil)
             default:
                 break
             }
@@ -72,33 +83,79 @@ final class Link {
         conn.start(queue: .main)
     }
 
-    func send(_ message: Wire) {
-        guard !closed, var data = try? JSONEncoder().encode(message) else { return }
-        data.append(0x0A)
+    func send(_ data: Data) {
         conn.send(content: data, completion: .contentProcessed { _ in })
     }
 
-    func close(_ error: Error? = nil) {
-        guard !closed else { return }
-        closed = true
+    func cancel() {
+        guard !finished else { return }
+        finished = true
         conn.stateUpdateHandler = nil
         conn.cancel()
+    }
+
+    private func finish(_ error: Error?) {
+        guard !finished else { return }
+        cancel()
         onClose?(error)
     }
 
     private func receive() {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
-            guard let self, !self.closed else { return }
+            guard let self, !self.finished else { return }
             if let data, !data.isEmpty {
-                self.buffer.append(data)
-                self.drain()
+                self.onData?(data)
             }
+            guard !self.finished else { return }
             if isComplete || error != nil {
-                self.close(error)
+                self.finish(error)
             } else {
                 self.receive()
             }
         }
+    }
+}
+
+/// A connection to one other Mac, carrying newline-delimited `Wire` messages.
+/// Everything runs on the main queue.
+final class Link {
+    let transport: Transport
+    var peerId: String?
+    var peerName: String?
+
+    var onReady: (() -> Void)?
+    var onMessage: ((Wire) -> Void)?
+    var onClose: ((Error?) -> Void)?
+
+    private var buffer = Data()
+    private var closed = false
+
+    init(_ transport: Transport) {
+        self.transport = transport
+    }
+
+    func start() {
+        transport.onReady = { [weak self] in self?.onReady?() }
+        transport.onData = { [weak self] data in
+            guard let self, !self.closed else { return }
+            self.buffer.append(data)
+            self.drain()
+        }
+        transport.onClose = { [weak self] error in self?.close(error) }
+        transport.start()
+    }
+
+    func send(_ message: Wire) {
+        guard !closed, var data = try? JSONEncoder().encode(message) else { return }
+        data.append(0x0A)
+        transport.send(data)
+    }
+
+    func close(_ error: Error? = nil) {
+        guard !closed else { return }
+        closed = true
+        transport.cancel()
+        onClose?(error)
     }
 
     private func drain() {

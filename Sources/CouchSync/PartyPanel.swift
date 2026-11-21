@@ -7,6 +7,7 @@ struct PartyPanel: View {
     @AppStorage("displayName") private var name = ""
     @ViewState private var address = ""
     @ViewState private var copied = false
+    @ViewState private var copiedAddress = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -87,9 +88,10 @@ struct PartyPanel: View {
                     Text("Recent").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     VStack(spacing: 2) {
                         ForEach(session.recents) { party in
+                            let byCode = IrohNet.isCode(party.address)
                             DeviceRow(name: party.name,
-                                      detail: party.name == party.address ? nil : party.address,
-                                      icon: "clock.arrow.circlepath",
+                                      detail: byCode ? "Invite code" : party.name == party.address ? nil : party.address,
+                                      icon: byCode ? "key" : "clock.arrow.circlepath",
                                       isHosting: tailnet.hosting.contains(party.address),
                                       onForget: { session.forget(party) }) {
                                 session.join(party.address)
@@ -103,7 +105,7 @@ struct PartyPanel: View {
                 if !tailnet.loaded {
                     Text("Looking for Macs on your tailnet…").font(.callout).foregroundStyle(.secondary)
                 } else if !tailnet.available {
-                    Text("Tailscale wasn't found. Enter an address below.")
+                    Text("Tailscale wasn't found. Ask the host for their invite code.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else if otherMacs.isEmpty {
                     Text("No other Macs are online on your tailnet.")
@@ -119,7 +121,7 @@ struct PartyPanel: View {
                 }
 
                 HStack {
-                    TextField("Hostname or IP", text: $address)
+                    TextField("Invite code, hostname or IP", text: $address)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { session.join(address) }
                     Button("Join") { session.join(address) }
@@ -137,7 +139,9 @@ struct PartyPanel: View {
     }
 
     private func refresh() async {
-        await tailnet.refresh(port: session.port, also: session.recents.map(\.address))
+        // Parties joined by invite code can't be checked from here.
+        let addresses = session.recents.map(\.address).filter { !IrohNet.isCode($0) }
+        await tailnet.refresh(port: session.port, also: addresses)
     }
 
     // MARK: In a party
@@ -147,22 +151,36 @@ struct PartyPanel: View {
             Label("You're hosting", systemImage: "dot.radiowaves.left.and.right")
                 .font(.headline)
 
-            let shareAddress = tailnet.selfName ?? tailnet.selfAddress ?? ProcessInfo.processInfo.hostName
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Others open CouchSync and pick this Mac, or join with:")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Send this invite code to whoever's joining. It works from anywhere, and it stays the same next time you host.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Text(IrohNet.grouped(session.inviteCode))
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                Button(copied ? "Copied" : "Copy invite code") {
+                    copy(session.inviteCode)
+                    copied = true
+                }
+            }
+
+            if tailnet.available, let shareAddress = tailnet.selfName ?? tailnet.selfAddress {
                 HStack {
-                    Text(shareAddress)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
+                    Text("Macs on your tailnet can also use **\(shareAddress)**")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                     Spacer()
-                    Button(copied ? "Copied" : "Copy") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(shareAddress, forType: .string)
-                        copied = true
+                    Button(copiedAddress ? "Copied" : "Copy") {
+                        copy(shareAddress)
+                        copiedAddress = true
                     }
+                    .controlSize(.small)
                 }
             }
 
@@ -170,6 +188,11 @@ struct PartyPanel: View {
 
             Button("End party", role: .destructive) { session.leave() }
         }
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private func joined(_ host: String) -> some View {

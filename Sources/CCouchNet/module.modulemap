@@ -1,0 +1,5 @@
+module CCouchNet [system] {
+    header "couchsync_net.h"
+    link "couchsync_net"
+    export *
+}

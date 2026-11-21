@@ -12,6 +12,7 @@
   <img src="https://img.shields.io/badge/Apple%20silicon-arm64-111" alt="Apple silicon">
   <img src="https://img.shields.io/badge/Swift-SwiftUI-F05138?logo=swift&logoColor=white" alt="Swift and SwiftUI">
   <img src="https://img.shields.io/badge/Tailscale-ready-242424?logo=tailscale&logoColor=white" alt="Works over Tailscale">
+  <img src="https://img.shields.io/badge/iroh-peer--to--peer-7c63e6" alt="Peer to peer with iroh">
 </p>
 
 <p align="center">
@@ -35,7 +36,8 @@ some services are only available in some countries.
 
     ./build.sh
 
-Needs only the Xcode Command Line Tools. Produces `build/CouchSync.app`.
+Needs the Xcode Command Line Tools and Rust (install it from https://rustup.rs),
+which builds the networking library in `net/`. Produces `build/CouchSync.app`.
 
 To turn on GIFs for everyone who gets this build, include a free GIPHY API key
 (create an app at https://developers.giphy.com and choose API):
@@ -67,9 +69,12 @@ downloads a release can extract the key from the app.
 
 1. Open CouchSync on every Mac, pick a service on Home and sign in.
 2. On one Mac: **Party → Host a party**.
-3. On the others: **Party**, then pick the host. Parties you've joined before
-   are under **Recent**, and Macs on your tailnet are listed below them (marked
-   *Hosting* when a party is running). Or type a Tailscale name or IP.
+3. The host sends their **invite code** (Party shows it, with a Copy button).
+   On the others: **Party**, paste the code into the box and **Join**. It works
+   from any network, with no Tailscale or port forwarding. Parties you've joined
+   before are under **Recent**. On a shared tailnet you can also pick the host
+   from the list (marked *Hosting* when a party is running), or type a Tailscale
+   name or IP.
 4. Start a title on any Mac. Everyone else's CouchSync opens the same title,
    on the same service, and keeps it in step. If a service opens the title's
    page without starting it, CouchSync asks you to press play.
@@ -185,6 +190,12 @@ blocked by Gatekeeper. Either build it on that Mac, or clear the flag once:
   them in Application Support.
 - `PasswordFill.swift`: Fill from Passwords.
 - `Tailscale.swift`: reads the tailnet from the Tailscale CLI for the join list.
+- `Iroh.swift`, `net/` (Rust): joining by invite code. A Mac's invite code is
+  its [iroh](https://iroh.computer) endpoint id, kept between launches. iroh
+  finds the host through n0's discovery service, connects directly through
+  both routers when it can, and falls back to n0's free public relays when it
+  can't. Either way the connection is end-to-end encrypted. `Link.swift` runs
+  the same messages over TCP (Tailscale, same network) or iroh.
 
 Set `COUCHSYNC_VERBOSE=1` to log sync activity to stderr. `App.swift` lists the
 other environment overrides used for testing.

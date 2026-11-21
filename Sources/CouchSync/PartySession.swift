@@ -76,7 +76,15 @@ final class PartySession: ObservableObject {
 
     init(port: UInt16 = PartySession.defaultPort) {
         self.port = port
+        // Start iroh now so this Mac is reachable by its invite code as soon as it hosts.
+        IrohNet.shared.onIncoming = { [weak self] transport in
+            guard let self, self.isHosting else { transport.cancel(); return }
+            self.accept(transport)
+        }
     }
+
+    /// This Mac's invite code, for joining without Tailscale.
+    var inviteCode: String { IrohNet.shared.code }
 
     private var isHosting: Bool { mode == .hosting }
 
@@ -103,8 +111,8 @@ final class PartySession: ObservableObject {
         lastError = nil
         do {
             guard let nwPort = NWEndpoint.Port(rawValue: port) else { return }
-            let listener = try NWListener(using: Link.parameters(), on: nwPort)
-            listener.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
+            let listener = try NWListener(using: TCPTransport.parameters(), on: nwPort)
+            listener.newConnectionHandler = { [weak self] conn in self?.accept(TCPTransport(conn)) }
             listener.stateUpdateHandler = { [weak self] state in
                 if case .failed(let error) = state {
                     self?.leave(byUser: false)
@@ -113,6 +121,7 @@ final class PartySession: ObservableObject {
             }
             listener.start(queue: .main)
             self.listener = listener
+            IrohNet.shared.accepting = true
             mode = .hosting
             chat?.reset()
             chat?.system("You're hosting. Chat and reactions reach everyone who joins.")
@@ -126,7 +135,8 @@ final class PartySession: ObservableObject {
     /// Joins the party hosted at `address` ("name", "ip" or "name:port").
     /// With `quietly`, a party that isn't there fails without an error message.
     func join(_ address: String, quietly: Bool = false) {
-        let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        var address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        if IrohNet.isCode(address) { address = IrohNet.normalize(address) }
         guard !address.isEmpty else { return }
         leave(byUser: false)
         lastError = nil
@@ -164,10 +174,21 @@ final class PartySession: ObservableObject {
     }
 
     private func connect(_ address: String, resuming: Bool) {
-        let (hostPart, portPart) = Self.parse(address, defaultPort: port)
-        guard let nwPort = NWEndpoint.Port(rawValue: portPart) else { return }
+        let byCode = IrohNet.isCode(address)
+        let transport: Transport
+        let hostPart: String
+        if byCode {
+            // Shown as "Connecting to the host…" until the roster names them.
+            hostPart = recents.first { $0.address == address }?.name ?? "the host"
+            transport = IrohTransport(dialing: address)
+        } else {
+            let (host, portPart) = Self.parse(address, defaultPort: port)
+            guard let nwPort = NWEndpoint.Port(rawValue: portPart) else { return }
+            hostPart = host
+            transport = TCPTransport(host: host, port: nwPort)
+        }
 
-        let link = Link(NWConnection(host: NWEndpoint.Host(hostPart), port: nwPort, using: Link.parameters()))
+        let link = Link(transport)
         links = [link]
         mode = .connecting(hostPart)
         shared = nil
@@ -217,14 +238,21 @@ final class PartySession: ObservableObject {
                 self.quiet = false
                 if silent { return }
                 if wasReconnecting { self.chat?.system("Couldn't get back into the party.") }
-                self.lastError = wasReconnecting
-                    ? "Lost the party. \(hostPart) may have stopped hosting."
-                    : "Couldn't reach \(hostPart). Is it hosting?"
+                if byCode {
+                    self.lastError = wasReconnecting
+                        ? "Lost the party. \(hostPart) may have stopped hosting."
+                        : "Couldn't reach the host. Check the invite code and that they're hosting."
+                } else {
+                    self.lastError = wasReconnecting
+                        ? "Lost the party. \(hostPart) may have stopped hosting."
+                        : "Couldn't reach \(hostPart). Is it hosting?"
+                }
             }
         }
         link.start()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self, weak link] in
+        // Finding a Mac by invite code and punching through both routers takes longer.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (byCode ? 25 : 8)) { [weak self, weak link] in
             guard let self, let link, case .connecting = self.mode,
                   self.links.contains(where: { $0 === link }) else { return }
             link.close()
@@ -247,6 +275,7 @@ final class PartySession: ObservableObject {
     private func reset() {
         listener?.cancel()
         listener = nil
+        IrohNet.shared.accepting = false
         links = []
         members = []
         awaitingFirstRoster = false
@@ -300,8 +329,8 @@ final class PartySession: ObservableObject {
 
     // MARK: Host side
 
-    private func accept(_ conn: NWConnection) {
-        let link = Link(conn)
+    private func accept(_ transport: Transport) {
+        let link = Link(transport)
         links.append(link)
         link.onMessage = { [weak self, weak link] message in
             guard let self, let link else { return }

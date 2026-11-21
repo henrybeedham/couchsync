@@ -3,3 +3,4 @@
 build/
 .swiftpm/
 giphy-key.txt
+net/target/

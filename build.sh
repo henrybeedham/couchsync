@@ -4,6 +4,18 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 APP="build/CouchSync.app"
+
+# The iroh bridge (invite-code parties) is Rust, in net/. Install Rust with
+# https://rustup.rs if cargo isn't found.
+[[ -x "$(command -v cargo)" ]] || source "$HOME/.cargo/env" 2>/dev/null || true
+if ! command -v cargo >/dev/null; then
+  echo "Rust is needed to build CouchSync. Install it from https://rustup.rs" >&2
+  exit 1
+fi
+rustup target add aarch64-apple-darwin >/dev/null 2>&1 || true
+MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --release --locked --target aarch64-apple-darwin \
+  --manifest-path net/Cargo.toml
+
 swift build -c release --arch arm64
 
 rm -rf "$APP"

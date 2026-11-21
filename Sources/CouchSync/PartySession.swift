@@ -83,8 +83,8 @@ final class PartySession: ObservableObject {
         }
     }
 
-    /// This Mac's invite code, for joining without Tailscale.
-    var inviteCode: String { IrohNet.shared.code }
+    /// The current party's invite code, for joining without Tailscale. New for every party.
+    @Published private(set) var inviteCode: String?
 
     private var isHosting: Bool { mode == .hosting }
 
@@ -121,7 +121,7 @@ final class PartySession: ObservableObject {
             }
             listener.start(queue: .main)
             self.listener = listener
-            IrohNet.shared.accepting = true
+            inviteCode = IrohNet.shared.startHosting()
             mode = .hosting
             chat?.reset()
             chat?.system("You're hosting. Chat and reactions reach everyone who joins.")
@@ -179,7 +179,7 @@ final class PartySession: ObservableObject {
         let hostPart: String
         if byCode {
             // Shown as "Connecting to the host…" until the roster names them.
-            hostPart = recents.first { $0.address == address }?.name ?? "the host"
+            hostPart = "the host"
             transport = IrohTransport(dialing: address)
         } else {
             let (host, portPart) = Self.parse(address, defaultPort: port)
@@ -275,7 +275,10 @@ final class PartySession: ObservableObject {
     private func reset() {
         listener?.cancel()
         listener = nil
-        IrohNet.shared.accepting = false
+        if inviteCode != nil {
+            IrohNet.shared.stopHosting()
+            inviteCode = nil
+        }
         links = []
         members = []
         awaitingFirstRoster = false
@@ -303,7 +306,8 @@ final class PartySession: ObservableObject {
     private static func loadRecents() -> [RecentParty] {
         guard let data = Debug.defaults.data(forKey: "recentParties"),
               let list = try? JSONDecoder().decode([RecentParty].self, from: data) else { return [] }
-        return list
+        // Invite codes only last one party; earlier builds saved them.
+        return list.filter { !IrohNet.isCode($0.address) }
     }
 
     private func saveRecent(address: String, name: String) {
@@ -383,7 +387,8 @@ final class PartySession: ObservableObject {
             members = (m.members ?? []).filter { $0.id != myId }.map {
                 Wire.Member(id: String($0.id.prefix(64)), name: String($0.name.prefix(40)))
             }
-            if awaitingFirstRoster, let target {
+            // Invite codes only last one party, so there's no point remembering them.
+            if awaitingFirstRoster, let target, !IrohNet.isCode(target) {
                 // The host lists itself first.
                 saveRecent(address: target, name: m.members?.first.map { String($0.name.prefix(40)) } ?? target)
             }

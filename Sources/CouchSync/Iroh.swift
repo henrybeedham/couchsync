@@ -2,46 +2,39 @@ import CCouchNet
 import Foundation
 
 /// Joining by invite code, with no shared network: a thin layer over the iroh
-/// bridge in net/. A Mac's invite code is its iroh endpoint id. iroh finds the
+/// bridge in net/. Every party gets a new invite code (the iroh endpoint id of
+/// a fresh endpoint), which stops working when the party ends. iroh finds the
 /// host, connects directly through both routers when it can, and goes through
 /// n0's public relays when it can't. It's end-to-end encrypted either way.
 /// Main thread only.
 final class IrohNet {
     static let shared = IrohNet()
 
-    /// This Mac's invite code. It stays the same between launches, so recent
-    /// parties keep working.
-    let code: String
     /// Someone dialed our invite code while we're hosting.
     var onIncoming: ((IrohTransport) -> Void)?
 
     fileprivate var transports: [UInt64: IrohTransport] = [:]
 
     private init() {
-        var secret = Self.loadSecret()
-        var buffer = [CChar](repeating: 0, count: 64)
-        _ = cs_net_code_for_secret(&secret, &buffer, buffer.count)
-        code = String(cString: buffer)
-        log("invite code \(code)")
-        if !cs_net_start(&secret, irohEvent, nil) {
+        // Earlier builds kept one code forever.
+        Debug.defaults.removeObject(forKey: "irohSecretKey")
+        if !cs_net_start(irohEvent, nil) {
             log("iroh didn't start")
         }
     }
 
-    /// Kept in defaults rather than the keychain: it only identifies this Mac's party.
-    private static func loadSecret() -> [UInt8] {
-        let key = "irohSecretKey"
-        if let saved = Debug.defaults.data(forKey: key), saved.count == 32 {
-            return [UInt8](saved)
-        }
-        var secret = [UInt8](repeating: 0, count: 32)
-        cs_net_generate_secret(&secret)
-        Debug.defaults.set(Data(secret), forKey: key)
-        return secret
+    /// Starts taking connections under a new invite code, and returns it.
+    func startHosting() -> String? {
+        var buffer = [CChar](repeating: 0, count: 64)
+        guard cs_net_host_start(&buffer, buffer.count) else { return nil }
+        let code = String(cString: buffer)
+        log("invite code \(code)")
+        return code
     }
 
-    var accepting = false {
-        didSet { cs_net_set_accepting(accepting) }
+    /// The invite code stops working.
+    func stopHosting() {
+        cs_net_host_stop()
     }
 
     /// Whether `text` is an invite code rather than a hostname or IP.

@@ -88,10 +88,9 @@ struct PartyPanel: View {
                     Text("Recent").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     VStack(spacing: 2) {
                         ForEach(session.recents) { party in
-                            let byCode = IrohNet.isCode(party.address)
                             DeviceRow(name: party.name,
-                                      detail: byCode ? "Invite code" : party.name == party.address ? nil : party.address,
-                                      icon: byCode ? "key" : "clock.arrow.circlepath",
+                                      detail: party.name == party.address ? nil : party.address,
+                                      icon: "clock.arrow.circlepath",
                                       isHosting: tailnet.hosting.contains(party.address),
                                       onForget: { session.forget(party) }) {
                                 session.join(party.address)
@@ -139,9 +138,7 @@ struct PartyPanel: View {
     }
 
     private func refresh() async {
-        // Parties joined by invite code can't be checked from here.
-        let addresses = session.recents.map(\.address).filter { !IrohNet.isCode($0) }
-        await tailnet.refresh(port: session.port, also: addresses)
+        await tailnet.refresh(port: session.port, also: session.recents.map(\.address))
     }
 
     // MARK: In a party
@@ -151,21 +148,23 @@ struct PartyPanel: View {
             Label("You're hosting", systemImage: "dot.radiowaves.left.and.right")
                 .font(.headline)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Send this invite code to whoever's joining. It works from anywhere, and it stays the same next time you host.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(IrohNet.grouped(session.inviteCode))
-                    .font(.system(.callout, design: .monospaced))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
-                Button(copied ? "Copied" : "Copy invite code") {
-                    copy(session.inviteCode)
-                    copied = true
+            if let code = session.inviteCode {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Send this invite code to whoever's joining. It works from anywhere, and only for this party.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(IrohNet.grouped(code))
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                    Button(copied ? "Copied" : "Copy invite code") {
+                        copy(code)
+                        copied = true
+                    }
                 }
             }
 

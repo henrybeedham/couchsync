@@ -70,6 +70,7 @@ downloads a release can extract the key from the app.
 1. Open CouchSync on every Mac, pick a service on Home and sign in.
 2. On one Mac: **Party → Host a party**.
 3. The host sends their **invite code** (Party shows it, with a Copy button).
+   Every party gets a new code, and it stops working when the party ends.
    On the others: **Party**, paste the code into the box and **Join**. It works
    from any network, with no Tailscale or port forwarding. Parties you've joined
    before are under **Recent**. On a shared tailnet you can also pick the host
@@ -190,8 +191,9 @@ blocked by Gatekeeper. Either build it on that Mac, or clear the flag once:
   them in Application Support.
 - `PasswordFill.swift`: Fill from Passwords.
 - `Tailscale.swift`: reads the tailnet from the Tailscale CLI for the join list.
-- `Iroh.swift`, `net/` (Rust): joining by invite code. A Mac's invite code is
-  its [iroh](https://iroh.computer) endpoint id, kept between launches. iroh
+- `Iroh.swift`, `net/` (Rust): joining by invite code. Each party gets a
+  fresh [iroh](https://iroh.computer) endpoint with a new random key, and its
+  id is the invite code, so the code dies with the party. iroh
   finds the host through n0's discovery service, connects directly through
   both routers when it can, and falls back to n0's free public relays when it
   can't. Either way the connection is end-to-end encrypted. `Link.swift` runs

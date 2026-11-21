@@ -1,8 +1,10 @@
 //! A tiny C interface over iroh, so the Swift app can join a party by invite
-//! code with no shared network. A Mac's invite code is its iroh endpoint id.
-//! iroh finds the other Mac through n0's discovery service, punches through
-//! both routers when it can, and falls back to n0's public relays when it
-//! can't. Traffic is end-to-end encrypted either way.
+//! code with no shared network. An invite code is the iroh endpoint id of the
+//! party: every party gets a fresh endpoint with a new random key, so every
+//! party has a new code, and the code stops working when the party ends.
+//! iroh finds the host through n0's discovery service, punches through both
+//! routers when it can, and falls back to n0's public relays when it can't.
+//! Traffic is end-to-end encrypted either way.
 //!
 //! Each connection carries one bidirectional QUIC stream of raw bytes; the app
 //! does its own message framing on top. Everything reports back through one
@@ -13,7 +15,7 @@ use std::{
     ffi::{c_char, c_void, CStr},
     str::FromStr,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
         Mutex, OnceLock,
     },
 };
@@ -26,7 +28,7 @@ use tokio::{runtime::Runtime, sync::mpsc};
 
 const ALPN: &[u8] = b"couchsync/party/1";
 
-/// Someone connected to us. `data` is their invite code.
+/// Someone connected to us. `data` is their endpoint id.
 const EVENT_INCOMING: i32 = 1;
 /// A connection we started is ready to use.
 const EVENT_READY: i32 = 2;
@@ -50,12 +52,16 @@ enum Command {
 
 struct Net {
     rt: Runtime,
-    secret: SecretKey,
-    endpoint: tokio::sync::OnceCell<Endpoint>,
+    /// For joining parties. It has its own throwaway key and takes no connections.
+    guest: tokio::sync::OnceCell<Endpoint>,
+    /// The current party's endpoint, while hosting.
+    host: Mutex<Option<Endpoint>>,
+    /// Bumped on every host start and stop, so a slow bind for a party that
+    /// already ended doesn't come back to life.
+    host_generation: AtomicU64,
     callback: Callback,
     conns: Mutex<HashMap<u64, mpsc::UnboundedSender<Command>>>,
     next_id: AtomicU64,
-    accepting: AtomicBool,
 }
 
 static NET: OnceLock<Net> = OnceLock::new();
@@ -64,50 +70,55 @@ fn net() -> Option<&'static Net> {
     NET.get()
 }
 
+async fn bind(secret: SecretKey, alpns: Vec<Vec<u8>>) -> Result<Endpoint, String> {
+    // Notice a host that vanished (quit, slept, lost Wi-Fi) in 15 seconds,
+    // about as fast as the TCP path. iroh sends keep-alives every 5, so a
+    // quiet party isn't mistaken for a dead one.
+    let transport = QuicTransportConfig::builder()
+        .max_idle_timeout(Some(VarInt::from_u32(15_000).into()))
+        .build();
+    Endpoint::builder(presets::N0)
+        .secret_key(secret)
+        .transport_config(transport)
+        .alpns(alpns)
+        .bind()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 impl Net {
     fn emit(&self, conn: u64, kind: i32, data: &[u8]) {
         (self.callback.f)(self.callback.ctx as *mut c_void, conn, kind, data.as_ptr(), data.len());
     }
 
-    async fn endpoint(&'static self) -> Result<&'static Endpoint, String> {
-        self.endpoint
-            .get_or_try_init(|| async {
-                // Notice a host that vanished (quit, slept, lost Wi-Fi) in 15
-                // seconds, about as fast as the TCP path. iroh sends keep-alives
-                // every 5, so a quiet party isn't mistaken for a dead one.
-                let transport = QuicTransportConfig::builder()
-                    .max_idle_timeout(Some(VarInt::from_u32(15_000).into()))
-                    .build();
-                let endpoint = Endpoint::builder(presets::N0)
-                    .secret_key(self.secret.clone())
-                    .transport_config(transport)
-                    .alpns(vec![ALPN.to_vec()])
-                    .bind()
-                    .await
-                    .map_err(|e| e.to_string())?;
-                self.rt.spawn(self.accept_loop(endpoint.clone()));
-                Ok(endpoint)
-            })
+    async fn guest(&'static self) -> Result<&'static Endpoint, String> {
+        self.guest
+            .get_or_try_init(|| bind(SecretKey::generate(), vec![]))
             .await
     }
 
-    async fn accept_loop(&'static self, endpoint: Endpoint) {
-        while let Some(incoming) = endpoint.accept().await {
-            if !self.accepting.load(Ordering::SeqCst) {
-                incoming.refuse();
-                continue;
+    async fn host(&'static self, secret: SecretKey, generation: u64) {
+        let endpoint = match bind(secret, vec![ALPN.to_vec()]).await {
+            Ok(endpoint) => endpoint,
+            Err(_) => return,
+        };
+        {
+            let mut slot = self.host.lock().unwrap();
+            if self.host_generation.load(Ordering::SeqCst) != generation {
+                drop(slot);
+                endpoint.close().await;
+                return;
             }
+            *slot = Some(endpoint.clone());
+        }
+        while let Some(incoming) = endpoint.accept().await {
             self.rt.spawn(async move {
                 let Ok(accepting) = incoming.accept() else { return };
                 let Ok(conn) = accepting.await else { return };
                 // The guest opens the stream and speaks first.
                 let Ok((send, recv)) = conn.accept_bi().await else { return };
-                if !self.accepting.load(Ordering::SeqCst) {
-                    conn.close(0u32.into(), b"not hosting");
-                    return;
-                }
                 let (id, rx) = self.register();
-                self.emit(id, EVENT_INCOMING, code(&conn.remote_id()).as_bytes());
+                self.emit(id, EVENT_INCOMING, conn.remote_id().to_string().as_bytes());
                 self.pump(id, conn, send, recv, rx).await;
             });
         }
@@ -122,7 +133,7 @@ impl Net {
 
     async fn connect(&'static self, id: u64, remote: EndpointId, mut rx: mpsc::UnboundedReceiver<Command>) {
         let attempt = async {
-            let endpoint = self.endpoint().await?;
+            let endpoint = self.guest().await?;
             let conn = endpoint.connect(remote, ALPN).await.map_err(|e| e.to_string())?;
             let (send, recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
             Ok::<_, String>((conn, send, recv))
@@ -212,15 +223,13 @@ unsafe fn str_arg<'a>(s: *const c_char) -> Option<&'a str> {
     CStr::from_ptr(s).to_str().ok()
 }
 
-/// Starts iroh with this Mac's 32-byte secret key. Call once.
-/// Returns false if it was already started or the runtime couldn't start.
+/// Starts iroh. Call once. Returns false if it was already started or the
+/// runtime couldn't start.
 #[no_mangle]
-pub unsafe extern "C" fn cs_net_start(secret: *const u8, callback: EventFn, ctx: *mut c_void) -> bool {
-    if secret.is_null() || NET.get().is_some() {
+pub unsafe extern "C" fn cs_net_start(callback: EventFn, ctx: *mut c_void) -> bool {
+    if NET.get().is_some() {
         return false;
     }
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(std::slice::from_raw_parts(secret, 32));
     let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .thread_name("couchsync-net")
@@ -231,43 +240,50 @@ pub unsafe extern "C" fn cs_net_start(secret: *const u8, callback: EventFn, ctx:
     };
     let net = Net {
         rt,
-        secret: SecretKey::from_bytes(&bytes),
-        endpoint: tokio::sync::OnceCell::new(),
+        guest: tokio::sync::OnceCell::new(),
+        host: Mutex::new(None),
+        host_generation: AtomicU64::new(0),
         callback: Callback { f: callback, ctx: ctx as usize },
         conns: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(1),
-        accepting: AtomicBool::new(false),
     };
     if NET.set(net).is_err() {
         return false;
     }
-    // Bind now so this Mac is reachable by the time someone dials it.
+    // Get the joining endpoint ready now, so joining is quicker.
     let net = NET.get().unwrap();
     net.rt.spawn(async move {
-        let _ = net.endpoint().await;
+        let _ = net.guest().await;
     });
     true
 }
 
-/// Writes 32 random bytes for a new secret key.
+/// Starts taking connections under a brand-new invite code, which it writes to
+/// `out` (53 bytes including the NUL). Ends any party already being hosted.
 #[no_mangle]
-pub unsafe extern "C" fn cs_net_generate_secret(out: *mut u8) {
-    let key = SecretKey::generate();
-    std::ptr::copy_nonoverlapping(key.to_bytes().as_ptr(), out, 32);
-}
-
-/// Writes the invite code for a secret key (53 bytes including the NUL).
-#[no_mangle]
-pub unsafe extern "C" fn cs_net_code_for_secret(secret: *const u8, out: *mut c_char, out_len: usize) -> bool {
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(std::slice::from_raw_parts(secret, 32));
-    let code = code(&SecretKey::from_bytes(&bytes).public());
-    if out_len < code.len() + 1 {
+pub unsafe extern "C" fn cs_net_host_start(out: *mut c_char, out_len: usize) -> bool {
+    let Some(net) = net() else { return false };
+    let secret = SecretKey::generate();
+    let code = code(&secret.public());
+    if out.is_null() || out_len < code.len() + 1 {
         return false;
     }
+    cs_net_host_stop();
+    let generation = net.host_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    net.rt.spawn(net.host(secret, generation));
     std::ptr::copy_nonoverlapping(code.as_ptr(), out as *mut u8, code.len());
     *out.add(code.len()) = 0;
     true
+}
+
+/// Stops hosting. The invite code stops working and everyone connected is dropped.
+#[no_mangle]
+pub extern "C" fn cs_net_host_stop() {
+    let Some(net) = net() else { return };
+    net.host_generation.fetch_add(1, Ordering::SeqCst);
+    if let Some(endpoint) = net.host.lock().unwrap().take() {
+        net.rt.spawn(async move { endpoint.close().await });
+    }
 }
 
 /// Whether `s` looks like an invite code rather than a hostname or IP.
@@ -276,15 +292,7 @@ pub unsafe extern "C" fn cs_net_is_code(s: *const c_char) -> bool {
     str_arg(s).and_then(parse_code).is_some()
 }
 
-/// Whether to take incoming connections (only while hosting).
-#[no_mangle]
-pub extern "C" fn cs_net_set_accepting(on: bool) {
-    if let Some(net) = net() {
-        net.accepting.store(on, Ordering::SeqCst);
-    }
-}
-
-/// Dials the Mac with this invite code. Returns a connection id (0 on a bad
+/// Dials the party with this invite code. Returns a connection id (0 on a bad
 /// code); EVENT_READY or EVENT_CLOSED follows.
 #[no_mangle]
 pub unsafe extern "C" fn cs_net_connect(code: *const c_char) -> u64 {

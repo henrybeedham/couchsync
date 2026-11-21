@@ -12,11 +12,10 @@ enum {
 
 typedef void (*cs_event_fn)(void *ctx, uint64_t conn, int32_t kind, const uint8_t *data, size_t len);
 
-bool cs_net_start(const uint8_t *secret, cs_event_fn callback, void *ctx);
-void cs_net_generate_secret(uint8_t *out);
-bool cs_net_code_for_secret(const uint8_t *secret, char *out, size_t out_len);
+bool cs_net_start(cs_event_fn callback, void *ctx);
+bool cs_net_host_start(char *out, size_t out_len);
+void cs_net_host_stop(void);
 bool cs_net_is_code(const char *s);
-void cs_net_set_accepting(bool on);
 uint64_t cs_net_connect(const char *code);
 void cs_net_send(uint64_t conn, const uint8_t *data, size_t len);
 void cs_net_close(uint64_t conn);

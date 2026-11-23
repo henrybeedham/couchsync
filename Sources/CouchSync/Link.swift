@@ -8,7 +8,14 @@ struct Wire: Codable {
         var name: String
     }
 
-    /// hello | roster | state | sync | chat | history | react | float
+    /// Someone the party is waiting for, and why ("ad" or "buffering").
+    struct Waiting: Codable, Equatable {
+        var id: String
+        var name: String
+        var reason: String
+    }
+
+    /// hello | roster | state | sync | chat | history | react | float | hold | wait
     var t: String
     var id: String?
     var name: String?
@@ -22,6 +29,10 @@ struct Wire: Codable {
     var msgId: String?
     var emoji: String?
     var on: Bool?
+    /// hold: "ad", "buffering", or nil when it's over. `pos` is where a buffering viewer is stuck.
+    var reason: String?
+    /// wait: everyone the party is waiting for (empty when it's over).
+    var waiting: [Waiting]?
 }
 
 /// Something that carries bytes to one other Mac: TCP (Tailscale, LAN) or iroh (invite code).

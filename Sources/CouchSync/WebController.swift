@@ -203,6 +203,7 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
             service = now
             UserDefaults.standard.set(now.id, forKey: "service")
         }
+        session?.pageChanged(videoId: currentVideoId)
         guard let frame = videoFrame, currentVideoId != attachedVideoId else { return }
         log("page moved to \(currentVideoId ?? "no title")")
         call("reset", in: frame.info)
@@ -295,6 +296,7 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
             guard fromVideoFrame else { return }
             videoFrame = nil
             attachedVideoId = nil
+            session?.localHold(videoId: nil, reason: nil)
             session?.videoGone()
 
         case "state", "tick":
@@ -308,6 +310,14 @@ final class WebController: NSObject, ObservableObject, WKScriptMessageHandler, W
             } else {
                 session?.localTick(videoId: videoId, paused: paused, pos: pos)
             }
+
+        case "hold":
+            // From the video's frame, or the page while there's no video yet
+            // (YouTube plays an ad before the title).
+            guard fromVideoFrame || (videoFrame == nil && frame.isMainFrame) else { return }
+            let pos = (body["pos"] as? NSNumber)?.doubleValue
+            session?.localHold(videoId: currentVideoId, reason: body["reason"] as? String,
+                               pos: pos.flatMap { $0.isFinite ? $0 : nil })
 
         case "fullscreen":
             if let on = body["on"] as? Bool { pageWantsFullscreen(on) }

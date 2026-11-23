@@ -146,6 +146,7 @@ struct ContentView: View {
                 }
             }
             .overlay(alignment: .bottomLeading) { toast }
+            .overlay(alignment: .bottom) { waitingPill }
 
             if chat.isVisible {
                 Divider()
@@ -238,6 +239,24 @@ struct ContentView: View {
             .help("Fill this sign-in from the Passwords app (⌥⌘P)")
             .padding(.top, 12)
             .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    /// Shown for as long as the party is waiting for someone (an ad, buffering).
+    @ViewBuilder
+    private var waitingPill: some View {
+        if let text = session.waitingText {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(text).font(.callout.weight(.medium))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .glassCapsule()
+            .padding(.bottom, 64)
+            .allowsHitTesting(false)
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.2), value: text)
         }
     }
 

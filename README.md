@@ -79,6 +79,9 @@ downloads a release can extract the key from the app.
 4. Start a title on any Mac. Everyone else's CouchSync opens the same title,
    on the same service, and keeps it in step. If a service opens the title's
    page without starting it, CouchSync asks you to press play.
+5. If someone gets a YouTube ad, or their video stalls loading for more than a
+   moment, everyone pauses and waits for them ("Waiting for Sam's ad to
+   finish"), then plays again together. Press play to go without them.
 
 ### Signing in with Passwords
 

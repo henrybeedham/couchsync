@@ -74,6 +74,29 @@ final class PartySession: ObservableObject {
     /// Back after a dropped connection: no "You joined" note.
     private var rejoined = false
 
+    // Waiting for each other. A Mac that can't play along (a YouTube ad, or
+    // stuck buffering) tells the host, which pauses the party until nobody is
+    // held up, then plays again for everyone at once.
+    struct Hold: Equatable {
+        var videoId: String
+        var reason: String
+    }
+    /// Why this Mac is holding the party up, if it is.
+    private var localHold: Hold?
+    private var localHoldPos: Double?
+    /// Host only: who's holding the party up, by member id, and where they're stuck.
+    private var holds: [String: (name: String, hold: Hold, pos: Double?)] = [:]
+    /// Host only: holds someone chose not to wait for (they played, paused or
+    /// seeked during the wait). Ignored until they're over.
+    private var overridden: Set<String> = []
+    /// Host only: the `seq` of the pause made to wait. The party plays again
+    /// only if nobody has played, paused or seeked since.
+    private var waitSeq: Int?
+    /// Host only: where the party is waiting, to play from once everyone's ready.
+    private var waitPos: Double = 0
+    /// Who the party is waiting for, as last announced.
+    @Published private(set) var waiting: [Wire.Waiting] = []
+
     init(port: UInt16 = PartySession.defaultPort) {
         self.port = port
         // Start iroh now so this Mac is reachable by its invite code as soon as it hosts.
@@ -281,6 +304,10 @@ final class PartySession: ObservableObject {
         }
         links = []
         members = []
+        holds = [:]
+        overridden = []
+        waitSeq = nil
+        waiting = []
         awaitingFirstRoster = false
         mode = .idle
     }
@@ -347,6 +374,10 @@ final class PartySession: ObservableObject {
                 self.show("\(name) left")
                 self.sendRoster()
             }
+            if let id = link.peerId, self.holds.removeValue(forKey: id) != nil {
+                self.overridden.remove(id)
+                self.reconsiderWaiting()
+            }
         }
         link.start()
     }
@@ -379,6 +410,7 @@ final class PartySession: ObservableObject {
                                paused: s.paused, pos: s.currentPos, seq: seq))
             }
             sendRoster()
+            if !waiting.isEmpty { link.send(Wire(t: "wait", waiting: waiting)) }
             show("\(link.peerName ?? "Someone") joined")
 
         case "roster":
@@ -403,6 +435,9 @@ final class PartySession: ObservableObject {
                     show("\(member.name) left")
                 }
             }
+            if awaitingFirstRoster, let localHold {
+                link.send(Wire(t: "hold", videoId: localHold.videoId, pos: localHoldPos, reason: localHold.reason))
+            }
             if awaitingFirstRoster {
                 awaitingFirstRoster = false
                 // The host had nothing on; offer what we're watching instead.
@@ -421,6 +456,7 @@ final class PartySession: ObservableObject {
             web?.apply(state, force: true)
             if isHosting {
                 relay(m, except: link)
+                reconsiderWaiting()
             }
             if let name = m.name {
                 show(Self.describe(name: name, state: state, previous: previous))
@@ -433,6 +469,23 @@ final class PartySession: ObservableObject {
             let state = SharedState(videoId: videoId, paused: paused, pos: pos, at: Date())
             shared = state
             web?.apply(state, force: false)
+
+        case "hold":
+            guard isHosting, let id = link.peerId, let name = link.peerName else { return }
+            if let videoId = m.videoId, let reason = m.reason, ["ad", "buffering"].contains(reason) {
+                holds[id] = (name, Hold(videoId: videoId, reason: reason), m.pos.flatMap { $0.isFinite ? $0 : nil })
+            } else {
+                holds[id] = nil
+                overridden.remove(id)
+            }
+            reconsiderWaiting()
+
+        case "wait":
+            guard !isHosting, let list = m.waiting else { return }
+            updateWaiting(Array(list.prefix(20)).map {
+                Wire.Waiting(id: String($0.id.prefix(64)), name: String($0.name.prefix(40)),
+                             reason: $0.reason == "ad" ? "ad" : "buffering")
+            })
 
         case "history":
             guard !isHosting, let history = m.history else { return }
@@ -516,6 +569,109 @@ final class PartySession: ObservableObject {
         }
         broadcast(Wire(t: "state", id: myId, name: displayName, videoId: videoId,
                        paused: paused, pos: pos, seq: seq))
+        if isHosting { reconsiderWaiting() }
+    }
+
+    // MARK: Waiting for each other
+
+    /// This Mac started or stopped holding the party up (`reason` nil: stopped).
+    func localHold(videoId: String?, reason: String?, pos: Double? = nil) {
+        let hold = videoId.flatMap { id in reason.map { Hold(videoId: id, reason: $0) } }
+        guard hold != localHold else { return }
+        localHold = hold
+        localHoldPos = pos
+        log("local hold \(hold.map { "\($0.reason) on \($0.videoId)" } ?? "over")")
+        switch mode {
+        case .hosting:
+            holds[myId] = hold.map { (displayName, $0, pos) }
+            if hold == nil { overridden.remove(myId) }
+            reconsiderWaiting()
+        case .joined:
+            links.first?.send(Wire(t: "hold", videoId: hold?.videoId, pos: pos, reason: hold?.reason))
+        default:
+            break
+        }
+    }
+
+    /// The page moved on: a hold for another title is over.
+    func pageChanged(videoId: String?) {
+        if let localHold, localHold.videoId != videoId {
+            self.localHold(videoId: nil, reason: nil)
+        }
+    }
+
+    /// Host only: pauses the party when someone is newly held up, and plays it
+    /// again once nobody is (unless someone took over in the meantime).
+    private func reconsiderWaiting() {
+        guard isHosting else { return }
+        let videoId = shared?.videoId
+        // Only holds on the title the party is watching, and only with company.
+        var active = hasCompany ? holds.filter { $0.value.hold.videoId == videoId } : [:]
+        // Someone played, paused or seeked during the wait: they've decided
+        // not to wait, so stop waiting for whoever was holding things up then.
+        if let waitSeq, waitSeq != seq {
+            overridden.formUnion(active.keys)
+            self.waitSeq = nil
+        }
+        active = active.filter { !overridden.contains($0.key) }
+        let list = active.map { Wire.Waiting(id: $0.key, name: $0.value.name, reason: $0.value.hold.reason) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        if !list.isEmpty, waiting.isEmpty, let s = shared, !s.paused {
+            // Wait where the furthest-behind buffering viewer is stuck, so
+            // they don't miss anything (everyone else rewinds a moment).
+            var pos = s.currentPos
+            for stuck in active.values.compactMap(\.pos) where stuck < pos && pos - stuck < 30_000 {
+                pos = stuck
+            }
+            setPartyState(paused: true, pos: pos, videoId: s.videoId)
+            waitSeq = seq
+            waitPos = pos
+            log("waiting for \(list.map(\.name))")
+        } else if list.isEmpty, !waiting.isEmpty {
+            if let waitSeq, waitSeq == seq, let s = shared {
+                setPartyState(paused: false, pos: waitPos, videoId: s.videoId)
+                log("everyone's ready")
+            }
+            waitSeq = nil
+        }
+        guard list != waiting else { return }
+        updateWaiting(list)
+        let message = Wire(t: "wait", waiting: list)
+        links.filter { $0.peerId != nil }.forEach { $0.send(message) }
+    }
+
+    /// Host only: plays or pauses everyone, the host's own player included.
+    private func setPartyState(paused: Bool, pos: Double, videoId: String) {
+        seq += 1
+        let state = SharedState(videoId: videoId, paused: paused, pos: pos, at: Date())
+        shared = state
+        web?.apply(state, force: true)
+        // No name: the wait note says what's going on, not "Host paused".
+        let message = Wire(t: "state", id: myId, videoId: videoId, paused: paused, pos: pos, seq: seq)
+        links.filter { $0.peerId != nil }.forEach { $0.send(message) }
+    }
+
+    /// The window shows `waiting` for as long as it lasts.
+    private func updateWaiting(_ list: [Wire.Waiting]) {
+        waiting = list
+    }
+
+    /// What the window says while the party waits.
+    var waitingText: String? {
+        waiting.isEmpty ? nil : Self.waitingText(waiting, me: myId)
+    }
+
+    static func waitingText(_ waiting: [Wire.Waiting], me: String) -> String {
+        if waiting.count == 1, let w = waiting.first {
+            if w.id == me {
+                return w.reason == "ad" ? "The party is waiting for your ad to finish" : "The party is waiting for you to catch up"
+            }
+            return (w.reason == "ad" ? "Waiting for \(w.name)'s ad to finish" : "Waiting for \(w.name) to catch up")
+                + ". Press play to go without them."
+        }
+        let names = waiting.map { $0.id == me ? "you" : $0.name }
+        return "Waiting for \(list(names)). Press play to go without them."
     }
 
     /// Periodic position report from the local player.
@@ -527,6 +683,9 @@ final class PartySession: ObservableObject {
         case .hosting:
             // Don't let our old page overwrite a title the party just switched to.
             if hasCompany, let s = shared, s.videoId != videoId { return }
+            // While waiting for someone the party stays paused where it is,
+            // even if our own player hasn't caught up with that yet.
+            if waitSeq != nil { return }
             shared = SharedState(videoId: videoId, paused: paused, pos: pos, at: Date())
             let message = Wire(t: "sync", id: myId, videoId: videoId, paused: paused, pos: pos, seq: seq)
             links.filter { $0.peerId != nil }.forEach { $0.send(message) }

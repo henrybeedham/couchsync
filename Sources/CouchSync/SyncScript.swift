@@ -64,6 +64,12 @@ enum SyncScript {
       let resetAt = -1e9;        // when the page last moved on to another title
       let awaitingMedia = false; // the player hasn't loaded the new title yet
       let warned = false;
+      // Why this viewer can't play along right now ('ad' or 'buffering'), so
+      // the party waits for them. See checkHold.
+      let hold = null;
+      let holdSince = 0;
+      let lastPos = null;
+      let lastProgressAt = 0;
 
       // Players often keep their <video> in a shadow root, closed ones too,
       // where querySelectorAll can't see it. Remember every root made.
@@ -156,7 +162,8 @@ enum SyncScript {
       };
 
       const onEvent = (e) => {
-        if (!ready || e.target !== video || now() < quietUntil || inAd()) return;
+        // Until checkHold sees an ad has ended, the player resuming is YouTube's doing.
+        if (!ready || e.target !== video || now() < quietUntil || inAd() || hold === 'ad') return;
         if (e.type === 'pause' && video.ended) return;
         const s = local();
         // Nothing the party doesn't already know.
@@ -169,9 +176,9 @@ enum SyncScript {
         // After the ad, the heartbeat brings this back in line.
         if (inAd()) return;
         const drift = Math.abs(pos() - s.pos);
-        const tolerance = force ? (s.paused ? 300 : 800) : 2500;
+        const tolerance = force ? (s.paused ? 300 : 800) : 1500;
         const settled = !video.seeking && video.readyState >= 3;
-        const needsSeek = drift > tolerance && (force || (settled && now() - lastFix > 5000));
+        const needsSeek = drift > tolerance && (force || (settled && now() - lastFix > 4000));
         const needsToggle = video.paused !== s.paused;
         // Only go quiet when we touch the player. Heartbeats that change
         // nothing must not swallow the viewer's own clicks.
@@ -185,10 +192,56 @@ enum SyncScript {
 
       const EVENTS = ['play', 'pause', 'seeked'];
 
+      let holdPostedAt = 0;
+      // Where a buffering viewer is stuck, so the party waits there rather
+      // than skip them ahead. (During an ad the video is the ad.)
+      const holdPos = () => (hold === 'buffering' && lastPos !== null ? lastPos : null);
+      const setHold = (reason) => {
+        // Repeated while it lasts, in case the app missed it (a page change, say).
+        if (reason === hold) {
+          if (hold && now() - holdPostedAt > 2000) { holdPostedAt = now(); post({ type: 'hold', reason, pos: holdPos() }); }
+          return;
+        }
+        holdPostedAt = now();
+        const wasAd = hold === 'ad';
+        hold = reason;
+        holdSince = now();
+        post({ type: 'hold', reason, pos: holdPos() });
+        lastPos = null;
+        // Back from an ad: take up the party's state (most likely paused,
+        // waiting for us) instead of telling everyone we pressed play.
+        if (wasAd && video && ready && shared) {
+          quietUntil = now() + 1500;
+          apply({ paused: shared.paused, pos: expected() }, true);
+        }
+      };
+
+      // An ad, or playback that should be moving but has been stuck for a
+      // while (buffering, or a seek that won't finish). A hiccup shorter than
+      // that doesn't hold anyone up. Once held for buffering, it lasts until
+      // the player has enough to play on.
+      const checkHold = () => {
+        if (inAd()) { setHold('ad'); return; }
+        if (!video || !ready || !shared) { setHold(null); return; }
+        const p = pos();
+        if (lastPos === null || Math.abs(p - lastPos) > 50 || video.paused) {
+          lastPos = p;
+          lastProgressAt = now();
+        }
+        const stuck = !shared.paused && !video.paused && !video.ended && now() - lastProgressAt > 1500;
+        if (hold === 'buffering') {
+          const enough = video.readyState >= 4 || (video.readyState >= 3 && now() - holdSince > 4000);
+          setHold(enough && !stuck ? null : 'buffering');
+        } else {
+          setHold(stuck ? 'buffering' : null);
+        }
+      };
+
       const detach = () => {
         if (!video) return;
         EVENTS.forEach((n) => video.removeEventListener(n, onEvent, true));
         video = null; announced = false; ready = false; shared = null;
+        if (hold === 'buffering') setHold(null);
         post({ type: 'gone' });
       };
 
@@ -403,6 +456,7 @@ enum SyncScript {
       }
 
       setInterval(scan, 500);
+      setInterval(checkHold, 500);
       setInterval(() => {
         if (!video || !ready || inAd()) return;
         const s = local();
